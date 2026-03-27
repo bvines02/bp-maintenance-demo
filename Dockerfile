@@ -26,5 +26,5 @@ COPY backend/ ./backend/
 RUN cd backend && python3 -c "from data_generator import generate_all; generate_all('../demo_data')"
 
 # ── Run ───────────────────────────────────────────────────────────────────────
-EXPOSE 8000
-CMD ["sh", "-c", "cd /app/backend && uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+EXPOSE 8080
+CMD sh -c "cd /app/backend && uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"
