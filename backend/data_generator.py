@@ -465,79 +465,121 @@ def generate_work_orders(assets_df):
 
 def generate_corrective_work_orders(assets_df):
     """
-    Generate corrective (breakdown) work orders for each asset based on
-    realistic MTBF rates. Duty equipment fails more than standby.
-    Some failures are linked to periods of deferred PPM.
+    Generate corrective (breakdown) work orders using a single per-asset MTBF.
+    Each failure event then randomly draws a failure mode from the class library.
+    This avoids the multiple-timeline inflation that occurs when each failure mode
+    generates its own independent timeline.
+
+    Target rates (corrective events per asset per year):
+      Centrifugal Pump (duty): ~0.8   Standby: ~0.2
+      Reciprocating Pump:      ~0.8
+      Centrifugal Compressor:  ~0.6
+      Gas Turbine Generator:   ~1.0
+      Electric Motor:          ~0.2
+      Pressure Vessel:         ~0.08
+      Heat Exchanger:          ~0.5
+      Control Valve:           ~0.4
+      Pressure Transmitter:    ~0.25
+      Flow Meter:              ~0.3
+      Fire & Gas Detector:     ~0.15
+      Switchgear Panel:        ~0.15
+      UPS:                     ~0.2
+      Fan / Blower (duty):     ~0.7   Standby: ~0.2
+      Safety Valve:            ~0.15
     """
+
+    # Asset-level MTBF in days, keyed by (equipment_class, operating_status)
+    # operating_status values: "Duty", "Standby", "Solo"
+    ASSET_MTBF = {
+        ("Centrifugal Pump",       "Duty"):    450,
+        ("Centrifugal Pump",       "Standby"): 1825,
+        ("Centrifugal Pump",       "Solo"):    450,
+        ("Reciprocating Pump",     "Duty"):    450,
+        ("Reciprocating Pump",     "Standby"): 1460,
+        ("Reciprocating Pump",     "Solo"):    450,
+        ("Centrifugal Compressor", "Duty"):    600,
+        ("Centrifugal Compressor", "Standby"): 1825,
+        ("Centrifugal Compressor", "Solo"):    600,
+        ("Gas Turbine Generator",  "Duty"):    365,
+        ("Gas Turbine Generator",  "Standby"): 1095,
+        ("Gas Turbine Generator",  "Solo"):    365,
+        ("Electric Motor",         "Solo"):    1825,
+        ("Pressure Vessel",        "Solo"):    4380,
+        ("Heat Exchanger",         "Solo"):    730,
+        ("Control Valve",          "Solo"):    900,
+        ("Pressure Transmitter",   "Solo"):    1460,
+        ("Flow Meter",             "Solo"):    1095,
+        ("Fire & Gas Detector",    "Solo"):    2190,
+        ("Switchgear Panel",       "Solo"):    2190,
+        ("UPS",                    "Duty"):    1825,
+        ("UPS",                    "Standby"): 3650,
+        ("UPS",                    "Solo"):    1825,
+        ("Fan / Blower",           "Duty"):    520,
+        ("Fan / Blower",           "Standby"): 1825,
+        ("Fan / Blower",           "Solo"):    520,
+        ("Safety Valve",           "Solo"):    2190,
+    }
+
     corrective_wos = []
-    wo_counter = [90000]  # separate number range from PPM WOs
-    dataset_days = (END_DATE - START_DATE).days
+    wo_counter = [90000]
 
     for _, asset in assets_df.iterrows():
         eq_class = asset["equipment_class"]
-        is_standby = asset["operating_status"] == "Standby"
+        op_status = asset["operating_status"]
         failure_defs = FAILURE_MODES.get(eq_class, [])
         if not failure_defs:
             continue
 
-        discipline = asset["discipline"]
+        mtbf = ASSET_MTBF.get((eq_class, op_status))
+        if mtbf is None:
+            continue
 
-        for (failure_mode, description, mtbf_duty, mtbf_standby, repair_hours, cost_mult, fm_discipline) in failure_defs:
-            # Select MTBF for this asset
-            if is_standby:
-                mtbf = mtbf_standby
-            else:
-                mtbf = mtbf_duty
+        # Scatter first failure within first MTBF window
+        failure_date = START_DATE + timedelta(days=random.randint(int(mtbf * 0.2), int(mtbf * 1.3)))
 
-            if mtbf is None:
-                continue
+        while failure_date <= END_DATE:
+            # Pick a failure mode at random, weighted by inverse MTBF (more common modes more likely)
+            # Use uniform weighting for simplicity — all modes equally likely
+            fm_def = random.choice(failure_defs)
+            (failure_mode, description, _mtbf_d, _mtbf_s, repair_hours, cost_mult, fm_discipline) = fm_def
 
-            # Scatter first failure randomly within first MTBF window
-            failure_date = START_DATE + timedelta(days=random.randint(int(mtbf * 0.3), int(mtbf * 1.2)))
+            wo_num = f"CM-{wo_counter[0]:06d}"
+            wo_counter[0] += 1
 
-            while failure_date <= END_DATE:
-                wo_num = f"CM-{wo_counter[0]:06d}"
-                wo_counter[0] += 1
+            repair_days = random.randint(0, 3)
+            completion_date = min(failure_date + timedelta(days=repair_days), END_DATE)
 
-                # Repair duration: same day to a few days later
-                repair_days = random.randint(0, 3)
-                completion_date = failure_date + timedelta(days=repair_days)
-                if completion_date > END_DATE:
-                    completion_date = END_DATE
+            base_rate = random.uniform(110, 160)
+            est_cost = round(repair_hours * base_rate * cost_mult, 2)
+            actual_cost = round(est_cost * random.uniform(0.85, 1.30), 2)
+            actual_hours = round(repair_hours * random.uniform(0.8, 1.4), 2)
 
-                # Base cost: PPM blended rate × repair hours × cost multiplier (unplanned work costs more)
-                base_rate = random.uniform(110, 160)  # higher rate for emergency/unplanned
-                est_cost = round(repair_hours * base_rate * cost_mult, 2)
-                actual_cost = round(est_cost * random.uniform(0.85, 1.30), 2)
-                actual_hours = round(repair_hours * random.uniform(0.8, 1.4), 2)
+            deferred_link = None
+            if op_status == "Duty" and random.random() < 0.12:
+                deferred_link = "Failure may be associated with deferred maintenance — review PPM history"
 
-                # Small chance the failure was preceded by (and potentially caused by) deferred maintenance
-                deferred_link = None
-                if not is_standby and random.random() < 0.15:
-                    deferred_link = "Failure may be associated with deferred maintenance - review PPM history"
+            corrective_wos.append({
+                "wo_number": wo_num,
+                "asset_tag": asset["tag"],
+                "wo_type": "Corrective",
+                "task_description": description,
+                "task_code": f"CM-{eq_class[:3].upper().replace(' ','')}",
+                "scheduled_date": failure_date,
+                "actual_completion_date": completion_date,
+                "status": "Completed",
+                "estimated_hours": round(repair_hours, 2),
+                "actual_hours": actual_hours,
+                "estimated_cost": est_cost,
+                "actual_cost": actual_cost,
+                "discipline": fm_discipline,
+                "failure_mode": failure_mode,
+                "notes": deferred_link,
+                "deferral_days": None,
+            })
 
-                corrective_wos.append({
-                    "wo_number": wo_num,
-                    "asset_tag": asset["tag"],
-                    "wo_type": "Corrective",
-                    "task_description": description,
-                    "task_code": f"CM-{eq_class[:2].upper()}",
-                    "scheduled_date": failure_date,      # date fault was raised
-                    "actual_completion_date": completion_date,
-                    "status": "Completed",
-                    "estimated_hours": round(repair_hours, 2),
-                    "actual_hours": actual_hours,
-                    "estimated_cost": est_cost,
-                    "actual_cost": actual_cost,
-                    "discipline": fm_discipline,
-                    "failure_mode": failure_mode,
-                    "notes": deferred_link,
-                    "deferral_days": None,
-                })
-
-                # Next failure: MTBF with ±40% scatter
-                next_interval = int(mtbf * random.uniform(0.6, 1.4))
-                failure_date = failure_date + timedelta(days=next_interval)
+            # Next failure: MTBF ±40% scatter
+            next_interval = int(mtbf * random.uniform(0.6, 1.4))
+            failure_date = failure_date + timedelta(days=next_interval)
 
     return pd.DataFrame(corrective_wos)
 
