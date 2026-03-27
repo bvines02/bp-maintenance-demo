@@ -1,10 +1,14 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 import pandas as pd
 import io
 import os
 from datetime import datetime
+
+DIST_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 
 from database import init_db, SessionLocal, Asset, WorkOrder, MaintenanceStrategy
 from routers import assets, workorders, analysis_router, chat
@@ -149,11 +153,16 @@ def list_platforms():
     ]
 
 
-@app.get("/")
-def root():
-    return {"message": "BP Maintenance Optimisation API", "status": "running"}
-
-
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# Serve built frontend — must come after all API routes
+if os.path.isdir(DIST_DIR):
+    app.mount("/static", StaticFiles(directory=os.path.join(DIST_DIR, "static")), name="static")
+
+    @app.get("/{full_path:path}")
+    def serve_spa(full_path: str):
+        index = os.path.join(DIST_DIR, "index.html")
+        return FileResponse(index)

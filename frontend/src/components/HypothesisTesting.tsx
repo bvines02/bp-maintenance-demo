@@ -254,7 +254,8 @@ function H1_2() {
       <Panel title="Overlap Detail — Click to expand">
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {overlaps.map((o, i) => {
-            const tasks = o.overlapping_tasks as Array<Record<string, unknown>>;
+            type TaskRow = { task_code: string; task_description: string; interval_days: number; estimated_hours: number; basis: string; annual_wo_count: number };
+            const tasks = o.overlapping_tasks as TaskRow[];
             const isOpen = expanded === i;
             const isDuplicate = o.overlap_type === "Duplicate function";
             return (
@@ -349,9 +350,10 @@ function H1_3() {
   if (isLoading) return <Loader />;
   if (!data) return null;
 
-  const ratioData = (data.cm_to_ppm_ratio_by_class as Array<Record<string, unknown>>)
+  type RatioRow = { equipment_class: string; cm_to_ppm_ratio_pct: number; ppm_count: number; corrective_count: number; total_cm_cost: number; signal: string; name: string };
+  const ratioData: RatioRow[] = (data.cm_to_ppm_ratio_by_class as Array<Record<string, unknown>>)
     .slice(0, 10)
-    .map(r => ({ ...r, name: (r.equipment_class as string).replace(" / ", "/") }));
+    .map(r => ({ ...(r as Omit<RatioRow, "name">), name: (r.equipment_class as string).replace(" / ", "/") }));
   const trendData = data.corrective_trend_by_class as Array<Record<string, unknown>>;
   const topClasses: string[] = data.top_classes_for_trend;
   const repeatAssets = data.repeat_failure_assets as Array<Record<string, unknown>>;
