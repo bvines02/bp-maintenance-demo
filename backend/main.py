@@ -160,9 +160,13 @@ def health():
 
 # Serve built frontend — must come after all API routes
 if os.path.isdir(DIST_DIR):
+    _index = os.path.join(DIST_DIR, "index.html")
     app.mount("/static", StaticFiles(directory=os.path.join(DIST_DIR, "static")), name="static")
+
+    @app.get("/")
+    def serve_root():
+        return FileResponse(_index)
 
     @app.get("/{full_path:path}")
     def serve_spa(full_path: str):
-        index = os.path.join(DIST_DIR, "index.html")
-        return FileResponse(index)
+        return FileResponse(_index)
