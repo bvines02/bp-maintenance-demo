@@ -6,6 +6,7 @@ import {
 } from "recharts";
 import { getH1_1, getH1_2, getH1_3 } from "../api";
 import { usePlatforms } from "../context/PlatformContext";
+import { H2_1, H2_2, H2_3, H2_4 } from "./HypothesisTestingH2";
 
 // ─── Shared primitives ───────────────────────────────────────────────────────
 
@@ -74,9 +75,12 @@ const TICK = { fontSize: 11, fill: "#94a3b8" };
 
 // ─── H1.1 ────────────────────────────────────────────────────────────────────
 
-function H1_1() {
+function H1_1({ params }: { params: { min_deferral_days: number } }) {
   const { platformsParam } = usePlatforms();
-  const { data, isLoading } = useQuery({ queryKey: ["h1-1", platformsParam], queryFn: () => getH1_1(platformsParam) });
+  const { data, isLoading } = useQuery({
+    queryKey: ["h1-1", platformsParam, params],
+    queryFn: () => getH1_1(platformsParam, { min_deferral_days: params.min_deferral_days }),
+  });
   const [showAll, setShowAll] = useState(false);
   if (isLoading) return <Loader />;
   if (!data) return null;
@@ -214,13 +218,13 @@ function H1_2() {
   const duplicates = overlaps.filter(o => o.overlap_type === "Duplicate function");
   const nested = overlaps.filter(o => o.overlap_type === "Nested interval");
 
-  const savingByClass: Record<string, number> = {};
+  const hoursByClass: Record<string, number> = {};
   overlaps.forEach(o => {
     const cls = o.equipment_class as string;
-    savingByClass[cls] = (savingByClass[cls] || 0) + (o.fleet_annual_mob_saving as number);
+    hoursByClass[cls] = (hoursByClass[cls] || 0) + (o.hours_saving_per_visit as number) * (o.annual_combined_opportunities as number);
   });
-  const savingChart = Object.entries(savingByClass)
-    .map(([name, value]) => ({ name: name.replace(" / ", "/"), value: Math.round(value) }))
+  const savingChart = Object.entries(hoursByClass)
+    .map(([name, value]) => ({ name: name.replace(" / ", "/"), value: +value.toFixed(1) }))
     .sort((a, b) => b.value - a.value)
     .slice(0, 8);
 
@@ -235,16 +239,16 @@ function H1_2() {
         <EvidenceCard label="Overlap Groups Found" value={overlaps.length} sub="Same component & function, separate tasks" color="#f59e0b" />
         <EvidenceCard label="Duplicate Functions" value={duplicates.length} sub="Identical component & function — one may be redundant" color="#ef4444" />
         <EvidenceCard label="Nested Intervals" value={nested.length} sub="Shorter task that could combine with longer visit" color="#f59e0b" />
-        <EvidenceCard label="Est. Fleet Annual Saving" value={`£${((data.total_fleet_annual_saving as number) / 1000).toFixed(0)}k`} sub="Mobilisation & efficiency gains from consolidation" color="#10b981" />
+        <EvidenceCard label="Combined Visit Opportunities" value={overlaps.reduce((a, o) => a + (o.annual_combined_opportunities as number), 0).toFixed(0)} sub="Visits per year that could consolidate tasks" color="#10b981" />
       </div>
 
       {savingChart.length > 0 && (
-        <Panel title="Estimated Annual Saving by Equipment Class (Consolidation Opportunities)">
+        <Panel title="Estimated Hours Saved per Year by Equipment Class (Task Consolidation)">
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={savingChart} layout="vertical" margin={{ left: 140 }}>
-              <XAxis type="number" tickFormatter={(v) => `£${(v / 1000).toFixed(0)}k`} tick={TICK} />
+              <XAxis type="number" tickFormatter={(v) => `${v}h`} tick={TICK} />
               <YAxis dataKey="name" type="category" width={140} tick={{ fontSize: 10, fill: "#94a3b8" }} />
-              <Tooltip contentStyle={CHART_STYLE} formatter={(v: number) => [`£${v.toLocaleString()}`, "Annual saving"]} />
+              <Tooltip contentStyle={CHART_STYLE} formatter={(v: number) => [`${v}h`, "Hours saved/yr"]} />
               <Bar dataKey="value" radius={[0, 3, 3, 0]} fill="#f59e0b" />
             </BarChart>
           </ResponsiveContainer>
@@ -280,7 +284,7 @@ function H1_2() {
                     borderRadius: 4, padding: "1px 8px", fontSize: 10, fontWeight: 700, textTransform: "uppercase",
                   }}>{o.overlap_type as string}</span>
                   <span style={{ marginLeft: "auto", color: "#10b981", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
-                    £{(o.fleet_annual_mob_saving as number).toLocaleString()}/yr
+                    {(o.hours_saving_per_visit as number)}h saved / visit
                   </span>
                 </button>
 
@@ -309,9 +313,9 @@ function H1_2() {
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                       {[
                         { label: "Assets in class", value: o.asset_count as number },
-                        { label: "Combined visit opportunities/year", value: `${(o.annual_combined_opportunities as number).toFixed(1)}x` },
+                        { label: "Combined visit opportunities/year", value: `${(o.annual_combined_opportunities as number).toFixed(1)}×` },
                         { label: "Hours saved per combined visit", value: `${o.hours_saving_per_visit}h` },
-                        { label: "Fleet mob saving/year", value: `£${(o.fleet_annual_mob_saving as number).toLocaleString()}` },
+                        { label: "Est. hours saved/year", value: `${Math.round((o.hours_saving_per_visit as number) * (o.annual_combined_opportunities as number))}h` },
                       ].map(m => (
                         <div key={m.label} style={{ background: "var(--surface2)", borderRadius: 4, padding: "8px 12px", flex: 1, minWidth: 120 }}>
                           <div style={{ color: "var(--muted)", fontSize: 10, textTransform: "uppercase", marginBottom: 2 }}>{m.label}</div>
@@ -333,7 +337,7 @@ function H1_2() {
 
       <Recommendation>
         {overlaps.length > 0
-          ? `${overlaps.length} overlap groups identified across the fleet. Immediate priority: ${duplicates.length} duplicate-function task pairs should be reviewed — one task in each pair may be fully redundant. Nested-interval tasks represent scheduling consolidation opportunities. Recommend a task rationalisation workshop using the component-function matrix above. Fleet mobilisation saving alone: £${((data.total_fleet_annual_saving as number) / 1000).toFixed(0)}k/year before considering labour efficiency gains.`
+          ? `${overlaps.length} overlap groups identified across the fleet. Immediate priority: ${duplicates.length} duplicate-function task pairs should be reviewed — one task in each pair may be fully redundant. Nested-interval tasks represent scheduling consolidation opportunities. Recommend a task rationalisation workshop using the component-function matrix above.`
           : "No significant task overlaps identified at current thresholds."
         }
       </Recommendation>
@@ -343,14 +347,17 @@ function H1_2() {
 
 // ─── H1.3 ────────────────────────────────────────────────────────────────────
 
-function H1_3() {
+function H1_3({ params }: { params: { cm_ppm_threshold: number; min_repeat_failures: number } }) {
   const { platformsParam } = usePlatforms();
-  const { data, isLoading } = useQuery({ queryKey: ["h1-3", platformsParam], queryFn: () => getH1_3(platformsParam) });
+  const { data, isLoading } = useQuery({
+    queryKey: ["h1-3", platformsParam, params],
+    queryFn: () => getH1_3(platformsParam, { cm_ppm_threshold: params.cm_ppm_threshold, min_repeat_failures: params.min_repeat_failures }),
+  });
   const [showAllAssets, setShowAllAssets] = useState(false);
   if (isLoading) return <Loader />;
   if (!data) return null;
 
-  type RatioRow = { equipment_class: string; cm_to_ppm_ratio_pct: number; ppm_count: number; corrective_count: number; total_cm_cost: number; signal: string; name: string };
+  type RatioRow = { equipment_class: string; cm_to_ppm_ratio_pct: number; ppm_count: number; corrective_count: number; signal: string; name: string };
   const ratioData: RatioRow[] = (data.cm_to_ppm_ratio_by_class as Array<Record<string, unknown>>)
     .slice(0, 10)
     .map(r => ({ ...(r as Omit<RatioRow, "name">), name: (r.equipment_class as string).replace(" / ", "/") }));
@@ -370,26 +377,26 @@ function H1_3() {
       />
 
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <EvidenceCard label="Repeat-Failure Assets" value={repeatAssets.length} sub="3 or more corrective events 2019–2024" color="#ef4444" />
-        <EvidenceCard label="High-Risk Equipment Classes" value={highRisk.length} sub="CM:PPM ratio >20% — strategy not preventing failures" color="#ef4444" />
+        <EvidenceCard label="Repeat-Failure Assets" value={repeatAssets.length} sub={`${params.min_repeat_failures}+ corrective events 2019–2024`} color="#ef4444" />
+        <EvidenceCard label="High-Risk Equipment Classes" value={highRisk.length} sub={`CM:PPM ratio >${params.cm_ppm_threshold}% — strategy not preventing failures`} color="#ef4444" />
         <EvidenceCard label="Worst Offender" value={ratioData.length > 0 ? `${ratioData[0].cm_to_ppm_ratio_pct as number}%` : "—"} sub={ratioData.length > 0 ? `${ratioData[0].equipment_class as string} CM:PPM ratio` : ""} color="#f59e0b" />
-        <EvidenceCard label="Total Corrective Cost" value={`£${((data.total_corrective_cost as number || 0) / 1000000).toFixed(2) !== "NaN" ? ((data.total_corrective_cost as number) / 1000).toFixed(0) : "—"}k`} sub="Across all corrective events" color="#f59e0b" />
+        <EvidenceCard label="Total Corrective Events" value={(data.total_corrective_events as number | undefined) ?? repeatAssets.reduce((a, r) => a + (r.corrective_count as number), 0)} sub="Across all assets and years" color="#f59e0b" />
       </div>
 
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
         <Panel title="Corrective-to-PPM Ratio by Equipment Class" action={
-          <span style={{ color: "var(--muted)", fontSize: 11 }}>&gt;20% = strategy gap  ·  &gt;10% = moderate risk</span>
+          <span style={{ color: "var(--muted)", fontSize: 11 }}>&gt;{params.cm_ppm_threshold}% = strategy gap  ·  &gt;{params.cm_ppm_threshold/2}% = moderate risk</span>
         }>
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={ratioData} layout="vertical" margin={{ left: 140 }}>
               <XAxis type="number" tickFormatter={(v) => `${v}%`} tick={TICK} />
               <YAxis dataKey="name" type="category" width={140} tick={{ fontSize: 10, fill: "#94a3b8" }} />
               <Tooltip contentStyle={CHART_STYLE} formatter={(v: number) => [`${v}%`, "CM:PPM Ratio"]} />
-              <ReferenceLine x={20} stroke="#ef4444" strokeDasharray="4 2" label={{ value: "20% threshold", fill: "#ef4444", fontSize: 9, position: "top" }} />
-              <ReferenceLine x={10} stroke="#f59e0b" strokeDasharray="4 2" />
+              <ReferenceLine x={params.cm_ppm_threshold} stroke="#ef4444" strokeDasharray="4 2" label={{ value: `${params.cm_ppm_threshold}% threshold`, fill: "#ef4444", fontSize: 9, position: "top" }} />
+              <ReferenceLine x={params.cm_ppm_threshold / 2} stroke="#f59e0b" strokeDasharray="4 2" />
               <Bar dataKey="cm_to_ppm_ratio_pct" radius={[0, 3, 3, 0]}>
                 {ratioData.map((entry, i) => (
-                  <Cell key={i} fill={(entry.cm_to_ppm_ratio_pct as number) > 20 ? "#ef4444" : (entry.cm_to_ppm_ratio_pct as number) > 10 ? "#f59e0b" : "#10b981"} />
+                  <Cell key={i} fill={(entry.cm_to_ppm_ratio_pct as number) > params.cm_ppm_threshold ? "#ef4444" : (entry.cm_to_ppm_ratio_pct as number) > params.cm_ppm_threshold/2 ? "#f59e0b" : "#10b981"} />
                 ))}
               </Bar>
             </BarChart>
@@ -434,8 +441,8 @@ function H1_3() {
                   <div style={{ color: "var(--muted)", fontSize: 10, textTransform: "uppercase" }}>CM:PPM ratio</div>
                 </div>
                 <div style={{ textAlign: "right", minWidth: 100 }}>
-                  <div style={{ fontWeight: 700, color: "#f59e0b" }}>£{(cls.total_cm_cost as number).toLocaleString()}</div>
-                  <div style={{ color: "var(--muted)", fontSize: 11 }}>corrective cost</div>
+                  <div style={{ fontWeight: 700, color: "#f59e0b" }}>{cls.corrective_count as number} events</div>
+                  <div style={{ color: "var(--muted)", fontSize: 11 }}>corrective WOs</div>
                 </div>
                 <div style={{
                   background: "#ef444422", color: "#ef4444", border: "1px solid #ef444444",
@@ -457,7 +464,7 @@ function H1_3() {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ background: "var(--surface2)", borderBottom: "1px solid var(--border)" }}>
-              {["Asset", "Class", "Status", "Crit.", "Breakdowns", "Failure Modes", "Total CM Cost"].map(h => (
+              {["Asset", "Class", "Status", "Crit.", "Breakdowns", "Failure Modes"].map(h => (
                 <th key={h} style={{ padding: "9px 12px", textAlign: "left", color: "var(--muted)", fontWeight: 600, fontSize: 11, textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
               ))}
             </tr>
@@ -473,7 +480,6 @@ function H1_3() {
                 <td style={{ padding: "9px 12px", fontWeight: 700, color: a.criticality === "A" ? "#ef4444" : a.criticality === "B" ? "#f59e0b" : "#10b981" }}>{a.criticality as string}</td>
                 <td style={{ padding: "9px 12px", textAlign: "center", fontWeight: 700, color: (a.corrective_count as number) >= 5 ? "#ef4444" : "#f59e0b" }}>{a.corrective_count as number}</td>
                 <td style={{ padding: "9px 12px", color: "var(--muted)", fontSize: 12, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{(a.failure_modes as string[]).join(", ") || "—"}</td>
-                <td style={{ padding: "9px 12px", color: "#f59e0b", fontWeight: 600, whiteSpace: "nowrap" }}>£{(a.total_corrective_cost as number).toLocaleString()}</td>
               </tr>
             ))}
           </tbody>
@@ -500,74 +506,207 @@ const Loader = () => (
   </div>
 );
 
-// ─── Root component ───────────────────────────────────────────────────────────
+// ─── Params panel ─────────────────────────────────────────────────────────────
 
-const HYPOTHESES = [
+type ParamDef = { label: string; min: number; max: number; step: number; unit?: string };
+
+function ParamsPanel({
+  params, defaults, defs, onChange,
+}: {
+  params: Record<string, number>;
+  defaults: Record<string, number>;
+  defs: Record<string, ParamDef>;
+  onChange: (k: string, v: number) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  const modified = Object.entries(params).some(([k, v]) => v !== defaults[k]);
+  if (Object.keys(defs).length === 0) return null;
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden" }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          width: "100%", padding: "9px 16px", display: "flex", alignItems: "center", gap: 10,
+          background: modified ? "#3b82f608" : "transparent", color: "var(--text)",
+          border: "none", cursor: "pointer", textAlign: "left",
+        }}>
+        <span style={{ color: "var(--muted)", fontSize: 13 }}>⚙</span>
+        <span style={{ fontSize: 12, fontWeight: 500, color: "var(--muted)" }}>Analysis Parameters</span>
+        {modified && <span style={{ fontSize: 11, color: "#3b82f6" }}>• modified</span>}
+        <span style={{ marginLeft: "auto", color: "var(--muted)", fontSize: 11 }}>{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div style={{ padding: "14px 16px", borderTop: "1px solid var(--border)", display: "flex", gap: 24, flexWrap: "wrap", alignItems: "flex-end", background: "var(--surface2)" }}>
+          {Object.entries(defs).map(([key, cfg]) => (
+            <div key={key} style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 180 }}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <label style={{ fontSize: 11, color: "var(--muted)" }}>{cfg.label}</label>
+                <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>{params[key]}{cfg.unit ?? ""}</span>
+              </div>
+              <input
+                type="range" min={cfg.min} max={cfg.max} step={cfg.step} value={params[key]}
+                onChange={e => onChange(key, Number(e.target.value))}
+                style={{ accentColor: "#3b82f6" }}
+              />
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--muted)" }}>
+                <span>{cfg.min}{cfg.unit ?? ""}</span><span>{cfg.max}{cfg.unit ?? ""}</span>
+              </div>
+            </div>
+          ))}
+          {modified && (
+            <button
+              onClick={() => Object.entries(defaults).forEach(([k, v]) => onChange(k, v))}
+              style={{ fontSize: 11, color: "var(--muted)", background: "transparent", border: "1px solid var(--border)", borderRadius: 4, padding: "5px 12px", cursor: "pointer", whiteSpace: "nowrap" }}>
+              Reset defaults
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Hypothesis registry ───────────────────────────────────────────────────────
+
+type HypothesisEntry = {
+  id: string; code: string; group: "H1" | "H2";
+  title: string; description: string;
+  defaults: Record<string, number>;
+  paramDefs: Record<string, ParamDef>;
+  render: (params: Record<string, number>) => React.ReactNode;
+};
+
+const HYPOTHESES: HypothesisEntry[] = [
   {
-    id: "h1-1",
-    code: "H1.1",
+    id: "h1-1", code: "H1.1", group: "H1",
     title: "PM intervals more conservative than required",
     description: "Tasks consistently deferred with no corrective consequence",
-    component: H1_1,
+    defaults: { min_deferral_days: 14 },
+    paramDefs: { min_deferral_days: { label: "Min deferral to count (days)", min: 3, max: 60, step: 1, unit: "d" } },
+    render: (p) => <H1_1 params={p as { min_deferral_days: number }} />,
   },
   {
-    id: "h1-2",
-    code: "H1.2",
+    id: "h1-2", code: "H1.2", group: "H1",
     title: "Duplicate or overlapping PM tasks",
     description: "Same failure mode covered by multiple tasks — never rationalised",
-    component: H1_2,
+    defaults: {}, paramDefs: {},
+    render: () => <H1_2 />,
   },
   {
-    id: "h1-3",
-    code: "H1.3",
+    id: "h1-3", code: "H1.3", group: "H1",
     title: "Corrective patterns reveal strategy gaps",
     description: "Repeat failures and high CM:PPM ratio signal insufficient prevention",
-    component: H1_3,
+    defaults: { cm_ppm_threshold: 20, min_repeat_failures: 3 },
+    paramDefs: {
+      cm_ppm_threshold: { label: "High-risk CM:PPM threshold (%)", min: 5, max: 50, step: 5, unit: "%" },
+      min_repeat_failures: { label: "Min repeat failures to flag", min: 2, max: 8, step: 1 },
+    },
+    render: (p) => <H1_3 params={p as { cm_ppm_threshold: number; min_repeat_failures: number }} />,
+  },
+  {
+    id: "h2-1", code: "H2.1", group: "H2",
+    title: "OEM vs actual failure rates",
+    description: "PM intervals anchored to OEM, not validated against observed MTBF",
+    defaults: { over_conservative_threshold: 10, review_threshold: 5 },
+    paramDefs: {
+      over_conservative_threshold: { label: "Over-conservative ratio (×)", min: 4, max: 30, step: 1, unit: "×" },
+      review_threshold: { label: "Review threshold (×)", min: 2, max: 15, step: 1, unit: "×" },
+    },
+    render: (p) => <H2_1 params={p as { over_conservative_threshold: number; review_threshold: number }} />,
+  },
+  {
+    id: "h2-2", code: "H2.2", group: "H2",
+    title: "Hard-time vs random failure",
+    description: "Hard-time replacements where no age-related failure pattern exists",
+    defaults: { random_cv_threshold: 0.8, wearout_cv_threshold: 0.5 },
+    paramDefs: {
+      random_cv_threshold: { label: "Random failure CV threshold", min: 0.5, max: 1.2, step: 0.05 },
+      wearout_cv_threshold: { label: "Wear-out CV threshold", min: 0.2, max: 0.7, step: 0.05 },
+    },
+    render: (p) => <H2_2 params={p as { random_cv_threshold: number; wearout_cv_threshold: number }} />,
+  },
+  {
+    id: "h2-3", code: "H2.3", group: "H2",
+    title: "Criticality vs maintenance effort",
+    description: "Maintenance effort not proportional to equipment criticality",
+    defaults: { min_corrective_events: 3 },
+    paramDefs: { min_corrective_events: { label: "Min corrective events (Crit A flag)", min: 1, max: 8, step: 1 } },
+    render: (p) => <H2_3 params={p as { min_corrective_events: number }} />,
+  },
+  {
+    id: "h2-4", code: "H2.4", group: "H2",
+    title: "Statutory gold-plating",
+    description: "Compliance-driven tasks exceed regulatory and statutory minimums",
+    defaults: {}, paramDefs: {},
+    render: () => <H2_4 />,
   },
 ];
 
+// ─── Root component ────────────────────────────────────────────────────────────
+
 export default function HypothesisTesting() {
-  const [active, setActive] = useState("h1-1");
-  const current = HYPOTHESES.find(h => h.id === active)!;
-  const Component = current.component;
+  const [activeId, setActiveId] = useState("h1-1");
+  const [allParams, setAllParams] = useState<Record<string, Record<string, number>>>(
+    Object.fromEntries(HYPOTHESES.map(h => [h.id, { ...h.defaults }]))
+  );
+
+  const active = HYPOTHESES.find(h => h.id === activeId)!;
+  const params = allParams[activeId];
+
+  const handleParam = (key: string, value: number) => {
+    setAllParams(prev => ({ ...prev, [activeId]: { ...prev[activeId], [key]: value } }));
+  };
+
+  const H1_HYPS = HYPOTHESES.filter(h => h.group === "H1");
+  const H2_HYPS = HYPOTHESES.filter(h => h.group === "H2");
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      {/* Hypothesis navigation */}
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        {HYPOTHESES.map(h => (
-          <button
-            key={h.id}
-            onClick={() => setActive(h.id)}
-            style={{
-              flex: 1, minWidth: 220, textAlign: "left",
-              background: active === h.id ? "#1a1d27" : "var(--surface)",
-              border: `1px solid ${active === h.id ? "#3b82f6" : "var(--border)"}`,
-              borderRadius: "var(--radius)", padding: "14px 18px",
-              color: "var(--text)", transition: "all 0.15s",
-              boxShadow: active === h.id ? "0 0 0 1px #3b82f640" : "none",
-            }}>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
-              <span style={{
-                background: active === h.id ? "#3b82f6" : "var(--surface2)",
-                color: active === h.id ? "#fff" : "var(--muted)",
-                borderRadius: 4, padding: "2px 8px", fontSize: 11, fontWeight: 800, letterSpacing: "0.04em",
-              }}>{h.code}</span>
+
+      {/* Unified tab bar */}
+      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden" }}>
+        {/* Group rows */}
+        {[{ group: "H1", label: "H1 — Interval Optimisation", hyps: H1_HYPS }, { group: "H2", label: "H2 — Strategy Effectiveness", hyps: H2_HYPS }].map(({ group, label, hyps }) => (
+          <div key={group} style={{ borderBottom: group === "H1" ? "1px solid var(--border)" : "none" }}>
+            <div style={{ padding: "6px 16px 4px", fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.07em", background: "var(--surface2)" }}>
+              {label}
             </div>
-            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4, color: active === h.id ? "var(--text)" : "var(--muted)" }}>{h.title}</div>
-            <div style={{ color: "var(--muted)", fontSize: 12, lineHeight: 1.4 }}>{h.description}</div>
-          </button>
+            <div style={{ display: "flex", padding: "8px 12px", gap: 6, flexWrap: "wrap" }}>
+              {hyps.map(h => {
+                const isActive = h.id === activeId;
+                return (
+                  <button
+                    key={h.id}
+                    onClick={() => setActiveId(h.id)}
+                    title={h.description}
+                    style={{
+                      padding: "8px 16px", borderRadius: 6, fontSize: 12,
+                      background: isActive ? "#3b82f6" : "transparent",
+                      color: isActive ? "#fff" : "var(--muted)",
+                      fontWeight: isActive ? 600 : 400,
+                      border: isActive ? "1px solid #3b82f6" : "1px solid transparent",
+                      cursor: "pointer", transition: "all 0.15s", whiteSpace: "nowrap",
+                    }}>
+                    <span style={{ fontFamily: "monospace", fontWeight: 700, marginRight: 6 }}>{h.code}</span>
+                    <span style={{ opacity: 0.85 }}>{h.title}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         ))}
       </div>
 
-      {/* Divider with active hypothesis label */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ height: 1, background: "var(--border)", flex: 1 }} />
-        <span style={{ color: "var(--muted)", fontSize: 12, whiteSpace: "nowrap" }}>{current.code}: {current.title}</span>
-        <div style={{ height: 1, background: "var(--border)", flex: 1 }} />
-      </div>
+      {/* Params panel */}
+      <ParamsPanel
+        params={params}
+        defaults={active.defaults}
+        defs={active.paramDefs}
+        onChange={handleParam}
+      />
 
-      <Component />
+      {/* Active hypothesis content */}
+      {active.render(params)}
     </div>
   );
 }

@@ -313,6 +313,48 @@ FAILURE_MODES = {
     ],
 }
 
+# ── H2.2: Failure distribution type per equipment class ──────────────────────
+# "random"  → exponential inter-failure times (CV ≈ 1.0) — hard-time unjustified
+# "wearout" → tight normal distribution (CV ≈ 0.15)      — hard-time justified
+# "mixed"   → log-normal with moderate spread (CV ≈ 0.55) — CBM recommended
+FAILURE_DISTRIBUTION = {
+    "Control Valve":          "random",   # electronic/actuator faults: random
+    "Pressure Transmitter":   "random",   # electronic sensor failure: random
+    "Flow Meter":             "random",   # electronic failure: random
+    "Fire & Gas Detector":    "random",   # electronic component: random
+    "Switchgear Panel":       "random",   # electrical arcing/contact: random
+    "Safety Valve":           "wearout",  # seat erosion / spring fatigue
+    "Pressure Vessel":        "wearout",  # corrosion fatigue: age-related
+    "Heat Exchanger":         "wearout",  # tube fatigue/fouling: wear-out
+    "Electric Motor":         "wearout",  # insulation ageing: wear-out
+    "UPS":                    "wearout",  # battery capacity degradation
+    "Centrifugal Pump":       "mixed",    # multiple failure modes
+    "Reciprocating Pump":     "mixed",    # mixed wear-out + random
+    "Centrifugal Compressor": "mixed",    # mixed — seal random, bearing wear-out
+    "Gas Turbine Generator":  "mixed",    # hot section wear + random faults
+    "Fan / Blower":           "mixed",    # bearing wear + random belt failure
+}
+
+# ── H2.3: Major-effort tasks skipped for Criticality C assets ────────────────
+# Crit C = non-safety-critical; run-to-failure or minimal PM is acceptable.
+# Skipping major overhauls & thorough inspections exposes the PPM effort gap.
+CRIT_C_SKIP_TASKS = {
+    "CP-M05",   # Pump full overhaul
+    "CP-E01",   # Motor insulation resistance test
+    "CC-M05",   # Compressor rotor dynamics check
+    "CC-M06",   # Compressor major overhaul
+    "RP-M03",   # Recip pump piston & liner inspection
+    "RP-M04",   # Recip pump full overhaul
+    "GT-M02",   # Gas turbine hot section inspection
+    "GT-M03",   # Gas turbine major overhaul
+    "HX-M02",   # Heat exchanger tube bundle inspection
+    "SW-E02",   # Switchgear contact resistance test
+    "SW-E03",   # Switchgear breaker maintenance
+    "EM-E01",   # Electric motor insulation test
+    "FB-M03",   # Fan impeller inspection
+    "SV-S01",   # Safety valve lift test (non-statutory basis for Crit C)
+}
+
 # Tasks with historically demonstrated deferral patterns
 DEFERRED_TASK_CODES = {
     "CP-M04": (60, 120),    # Coupling inspection
@@ -447,6 +489,8 @@ def generate_work_orders_for_platform(assets_df: pd.DataFrame, platform: dict, w
         is_standby = asset["operating_status"] == "Standby"
         task_codes = CLASS_STRATEGY_MAP.get(eq_class, [])
 
+        criticality = asset["criticality"]
+
         for task_code in task_codes:
             strat = STRATEGY_LOOKUP.get(task_code)
             if strat is None:
@@ -455,6 +499,10 @@ def generate_work_orders_for_platform(assets_df: pd.DataFrame, platform: dict, w
             (code, desc, interval_days, est_hours, basis, duty_only, standby_applies) = strat
 
             if is_standby and not standby_applies:
+                continue
+
+            # H2.3: Crit C assets skip major overhaul / thorough inspection tasks
+            if criticality == "C" and task_code in CRIT_C_SKIP_TASKS:
                 continue
 
             scheduled = START_DATE + timedelta(days=random.randint(0, interval_days))
@@ -534,6 +582,7 @@ def generate_corrective_work_orders_for_platform(assets_df: pd.DataFrame, platfo
 
         mtbf = int(base_mtbf * mtbf_mult)
 
+        dist_type = FAILURE_DISTRIBUTION.get(eq_class, "mixed")
         failure_date = START_DATE + timedelta(days=random.randint(int(mtbf * 0.2), int(mtbf * 1.3)))
 
         while failure_date <= END_DATE:
@@ -574,7 +623,19 @@ def generate_corrective_work_orders_for_platform(assets_df: pd.DataFrame, platfo
                 "deferral_days": None,
             })
 
-            next_interval = int(mtbf * random.uniform(0.6, 1.4))
+            # H2.2: Use distribution type to generate inter-failure interval
+            if dist_type == "random":
+                # Exponential: memoryless random failures (CV ≈ 1.0)
+                next_interval = max(30, int(np.random.exponential(mtbf)))
+            elif dist_type == "wearout":
+                # Tight normal: age-related wear-out (CV ≈ 0.15)
+                next_interval = max(int(mtbf * 0.3), int(np.random.normal(mtbf, mtbf * 0.15)))
+            else:
+                # Log-normal: mixed failure modes (CV ≈ 0.55)
+                sigma = 0.5
+                mu = np.log(mtbf) - (sigma ** 2) / 2
+                next_interval = max(30, int(np.random.lognormal(mu, sigma)))
+
             failure_date = failure_date + timedelta(days=next_interval)
 
     return pd.DataFrame(corrective_wos)

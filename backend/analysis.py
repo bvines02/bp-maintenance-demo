@@ -265,18 +265,18 @@ def get_cost_summary(db: Session, platforms: list[str] | None = None) -> dict:
     }
 
 
-def get_h1_1_analysis(db: Session, platforms: list[str] | None = None) -> dict:
+def get_h1_1_analysis(db: Session, platforms: list[str] | None = None, min_deferral_days: int = 14) -> dict:
     """
     H1.1: PM schedules more conservative than equipment requires.
     Evidence: (a) tasks consistently deferred with no corrective uptick,
     (b) fleet-wide deferral vs corrective correlation.
     """
     tag_set = _asset_tags(db, platforms)
-    # Get all deferred tasks (>14 days late) grouped by asset+task
+    # Get all deferred tasks (>min_deferral_days late) grouped by asset+task
     deferred_wos = _filter_wos(db.query(WorkOrder).filter(
         WorkOrder.wo_type.in_(["PPM", "Statutory"]),
         WorkOrder.status == "Completed",
-        WorkOrder.deferral_days > 14,
+        WorkOrder.deferral_days > min_deferral_days,
     ), tag_set).all()
 
     # For each asset, count deferrals and corrective events per year
@@ -569,7 +569,8 @@ def get_h1_2_analysis(db: Session, platforms: list[str] | None = None) -> dict:
     }
 
 
-def get_h1_3_analysis(db: Session, platforms: list[str] | None = None) -> dict:
+def get_h1_3_analysis(db: Session, platforms: list[str] | None = None,
+                      cm_ppm_threshold: float = 20.0, min_repeat_failures: int = 3) -> dict:
     """
     H1.3: Corrective maintenance patterns reveal equipment classes
     where the preventive strategy is insufficient.
@@ -585,10 +586,10 @@ def get_h1_3_analysis(db: Session, platforms: list[str] | None = None) -> dict:
             asset_corrective.setdefault(wo.asset_tag, [])
             asset_corrective[wo.asset_tag].append(wo)
 
-    # Repeat failures: assets with 3+ corrective events
+    # Repeat failures: assets with min_repeat_failures+ corrective events
     repeat_failures = []
     for tag, wos in asset_corrective.items():
-        if len(wos) >= 3:
+        if len(wos) >= min_repeat_failures:
             asset = db.query(Asset).filter(Asset.tag == tag).first()
             failure_modes = list(set(w.failure_mode for w in wos if w.failure_mode))
             total_cost = sum(w.actual_cost or 0 for w in wos)
@@ -628,7 +629,7 @@ def get_h1_3_analysis(db: Session, platforms: list[str] | None = None) -> dict:
             "corrective_count": cm,
             "cm_to_ppm_ratio_pct": ratio,
             "total_cm_cost": round(class_cm_cost.get(cls, 0), 2),
-            "signal": "HIGH — strategy may be insufficient" if ratio > 20 else ("MODERATE" if ratio > 10 else "LOW"),
+            "signal": "HIGH — strategy may be insufficient" if ratio > cm_ppm_threshold else ("MODERATE" if ratio > cm_ppm_threshold / 2 else "LOW"),
         })
     cm_ratio.sort(key=lambda x: x["cm_to_ppm_ratio_pct"], reverse=True)
 
@@ -648,7 +649,7 @@ def get_h1_3_analysis(db: Session, platforms: list[str] | None = None) -> dict:
 
     trend_data = [{"year": yr, **counts} for yr, counts in sorted(yearly_trend.items())]
 
-    high_risk = [r for r in cm_ratio if r["cm_to_ppm_ratio_pct"] > 20]
+    high_risk = [r for r in cm_ratio if r["cm_to_ppm_ratio_pct"] > cm_ppm_threshold]
 
     return {
         "hypothesis": "H1.3",
@@ -660,7 +661,7 @@ def get_h1_3_analysis(db: Session, platforms: list[str] | None = None) -> dict:
         "high_risk_classes": high_risk,
         "summary": (
             f"{len(repeat_failures)} assets have 3 or more corrective events across the dataset period. "
-            f"{len(high_risk)} equipment classes show a corrective-to-PPM ratio above 20%, "
+            f"{len(high_risk)} equipment classes show a corrective-to-PPM ratio above {cm_ppm_threshold:.0f}%, "
             f"indicating the current preventive strategy is not preventing failures at an acceptable rate."
         ),
     }
@@ -721,3 +722,406 @@ def _annual_cost(work_orders: list) -> float:
     if not completed:
         return sum(w.estimated_cost or 0 for w in work_orders) / 6  # 6 year dataset
     return sum(w.actual_cost for w in completed) / 6
+
+
+# ---------------------------------------------------------------------------
+# H2 Hypotheses
+# ---------------------------------------------------------------------------
+
+REGULATORY_MINIMUMS = {
+    "FG-I01": {
+        "regulation": "IEC 61511 / SCE",
+        "description": "F&G Detector Functional Test",
+        "min_interval_days": 180,
+        "notes": "IEC 61511 supports 6-monthly proof test for SIL-rated F&G detectors. Quarterly testing exceeds the SIL requirement for most SIL 1–2 applications.",
+    },
+    "FG-I02": {
+        "regulation": "SCE / Manufacturer",
+        "description": "F&G Detector Calibration",
+        "min_interval_days": 365,
+        "notes": "Annual calibration satisfies manufacturer guidance and regulatory requirements for most detector types. 6-monthly calibration exceeds the baseline.",
+    },
+    "SV-S02": {
+        "regulation": "PSSR 2000 / WSE",
+        "description": "Safety Valve Visual Inspection",
+        "min_interval_days": 730,
+        "notes": "PSSR Written Scheme of Examination typically mandates 2-yearly visual inspection. Annual inspection exceeds the minimum for most classifications.",
+    },
+    "PV-S01": {
+        "regulation": "PSSR 2000 / WSE",
+        "description": "Pressure Vessel External Visual",
+        "min_interval_days": 730,
+        "notes": "PSSR WSE minimum for external visual on low-risk closed vessels is 2-yearly. Annual inspection gold-plates the requirement for most vessel categories.",
+    },
+    "CV-I01": {
+        "regulation": "IEC 61511 / SIL",
+        "description": "Control Valve Partial Stroke Test",
+        "min_interval_days": 365,
+        "notes": "SIL calculations for SIL 1–2 ESD valves typically support annual proof testing. 6-monthly interval is conservative beyond what the SIL calculation requires.",
+    },
+    "PT-I02": {
+        "regulation": "Industry Best Practice",
+        "description": "Impulse Line Inspection",
+        "min_interval_days": 365,
+        "notes": "Industry best practice supports annual impulse line inspection. 6-monthly interval was likely set conservatively at commissioning and never reviewed.",
+    },
+}
+
+DATASET_YEARS = 6
+
+
+def get_h2_1_analysis(db: Session, platforms: list[str] | None = None,
+                      over_conservative_threshold: float = 10.0, review_threshold: float = 5.0) -> dict:
+    """
+    H2.1: PM frequencies anchored to OEM recommendations, not validated against
+    actual failure rates. Compare PPM intervals vs empirical MTBF from corrective data.
+    """
+    tag_set = _asset_tags(db, platforms)
+    all_assets = _filter_assets(db.query(Asset), tag_set).all()
+    corrective_wos = _filter_wos(
+        db.query(WorkOrder).filter(WorkOrder.wo_type == "Corrective"), tag_set
+    ).all()
+
+    # Empirical inter-failure intervals per asset
+    asset_failures: dict = {}
+    for wo in corrective_wos:
+        if wo.scheduled_date:
+            asset_failures.setdefault(wo.asset_tag, []).append(wo.scheduled_date)
+
+    asset_mtbf: dict = {}
+    for tag, dates in asset_failures.items():
+        sorted_dates = sorted(dates)
+        if len(sorted_dates) >= 2:
+            intervals = [(sorted_dates[i + 1] - sorted_dates[i]).days for i in range(len(sorted_dates) - 1)]
+            asset_mtbf[tag] = float(np.mean(intervals))
+
+    strategies = db.query(MaintenanceStrategy).all()
+    strat_by_class: dict = {}
+    for s in strategies:
+        strat_by_class.setdefault(s.equipment_class, []).append(s)
+
+    # Per-class aggregation
+    class_data: dict = {}
+    for asset in all_assets:
+        cls = asset.equipment_class
+        if cls not in class_data:
+            class_data[cls] = {"asset_count": 0, "no_corrective": 0, "mtbfs": []}
+        class_data[cls]["asset_count"] += 1
+        if asset.tag not in asset_failures:
+            class_data[cls]["no_corrective"] += 1
+        elif asset.tag in asset_mtbf:
+            class_data[cls]["mtbfs"].append(asset_mtbf[asset.tag])
+
+    results = []
+    for cls, info in class_data.items():
+        strats = strat_by_class.get(cls, [])
+        time_based = [s for s in strats if s.basis in ("Time-based", "Condition-based")]
+        if not time_based:
+            continue
+        shortest_interval = min(s.interval_days for s in time_based)
+        shortest_task = next(s.task_code for s in time_based if s.interval_days == shortest_interval)
+
+        mtbfs = info["mtbfs"]
+        empirical_mtbf = round(float(np.mean(mtbfs))) if len(mtbfs) >= 3 else None
+        ratio = round(empirical_mtbf / shortest_interval, 1) if empirical_mtbf else None
+        pct_no_cm = round(info["no_corrective"] / max(info["asset_count"], 1) * 100, 0)
+
+        signal = "OVER-CONSERVATIVE" if ratio and ratio > over_conservative_threshold else ("REVIEW" if ratio and ratio > review_threshold else "ALIGNED")
+
+        results.append({
+            "equipment_class": cls,
+            "asset_count": info["asset_count"],
+            "shortest_pm_interval_days": shortest_interval,
+            "shortest_pm_task": shortest_task,
+            "empirical_mtbf_days": empirical_mtbf,
+            "pm_cycles_per_failure": ratio,
+            "pct_assets_zero_corrective": pct_no_cm,
+            "signal": signal,
+        })
+
+    results.sort(key=lambda x: x["pm_cycles_per_failure"] or 0, reverse=True)
+    over_conservative = [r for r in results if r["signal"] == "OVER-CONSERVATIVE"]
+    max_ratio = max((r["pm_cycles_per_failure"] or 0) for r in results) if results else 0
+
+    return {
+        "hypothesis": "H2.1",
+        "title": "PM frequencies not validated against actual failure rates",
+        "class_analysis": results,
+        "over_conservative_count": len(over_conservative),
+        "summary": (
+            f"{len(over_conservative)} equipment classes show PM intervals firing more than 10× "
+            f"per observed failure — the highest ratio is {max_ratio:.0f}×. "
+            f"These schedules appear to be OEM starting points never calibrated to observed failure "
+            f"rates in this operating environment (threshold: {over_conservative_threshold:.0f}×)."
+        ),
+    }
+
+
+def get_h2_2_analysis(db: Session, platforms: list[str] | None = None,
+                      random_cv_threshold: float = 0.8, wearout_cv_threshold: float = 0.5) -> dict:
+    """
+    H2.2: Hard-time replacements where no age-related failure pattern exists.
+    Coefficient of variation (CV) of inter-failure times:
+      CV ≈ 1.0 → random (exponential) → hard-time adds no value
+      CV < 0.5 → wear-out → hard-time justified
+    """
+    tag_set = _asset_tags(db, platforms)
+    all_assets = _filter_assets(db.query(Asset), tag_set).all()
+    corrective_wos = _filter_wos(
+        db.query(WorkOrder).filter(WorkOrder.wo_type == "Corrective"), tag_set
+    ).all()
+
+    asset_class = {a.tag: a.equipment_class for a in all_assets}
+
+    class_failures: dict = {}
+    for wo in corrective_wos:
+        cls = asset_class.get(wo.asset_tag)
+        if not cls or not wo.scheduled_date:
+            continue
+        class_failures.setdefault(cls, {}).setdefault(wo.asset_tag, []).append(wo.scheduled_date)
+
+    time_based_classes = {
+        s.equipment_class for s in db.query(MaintenanceStrategy).filter(
+            MaintenanceStrategy.basis == "Time-based"
+        ).all()
+    }
+
+    results = []
+    for cls in time_based_classes:
+        all_intervals = []
+        total_failures = 0
+        if cls in class_failures:
+            for tag, dates in class_failures[cls].items():
+                total_failures += len(dates)
+                sorted_dates = sorted(dates)
+                for i in range(len(sorted_dates) - 1):
+                    all_intervals.append((sorted_dates[i + 1] - sorted_dates[i]).days)
+
+        if len(all_intervals) < 3:
+            results.append({
+                "equipment_class": cls,
+                "total_failures": total_failures,
+                "mean_inter_failure_days": None,
+                "cv": None,
+                "failure_pattern": "Insufficient data",
+                "hard_time_justified": None,
+                "recommendation": "Insufficient failure history — monitor for 2+ more years before drawing conclusions.",
+            })
+            continue
+
+        mean_ift = float(np.mean(all_intervals))
+        std_ift = float(np.std(all_intervals))
+        cv = round(std_ift / mean_ift, 2) if mean_ift > 0 else None
+
+        if cv is None:
+            pattern, justified, rec = "Unknown", None, "Cannot assess."
+        elif cv > random_cv_threshold:
+            pattern = "Random (exponential)"
+            justified = False
+            rec = "Failure timing is random — hard-time replacement does not reduce failure probability. Consider condition-based monitoring or run-to-failure with spare holding."
+        elif cv < wearout_cv_threshold:
+            pattern = "Wear-out"
+            justified = True
+            rec = "Age-related failure pattern confirmed. Hard-time replacement is justified — verify interval aligns with P-F curve."
+        else:
+            pattern = "Mixed"
+            justified = None
+            rec = "Mixed signal — some wear-out component but significant randomness. Consider CBM to isolate the wear-out sub-population."
+
+        results.append({
+            "equipment_class": cls,
+            "total_failures": total_failures,
+            "mean_inter_failure_days": round(mean_ift),
+            "cv": cv,
+            "failure_pattern": pattern,
+            "hard_time_justified": justified,
+            "recommendation": rec,
+        })
+
+    results.sort(key=lambda x: (x["cv"] if x["cv"] is not None else -1), reverse=True)
+    unjustified = [r for r in results if r["hard_time_justified"] is False]
+
+    return {
+        "hypothesis": "H2.2",
+        "title": "Hard-time replacements performed where no age-related failure pattern exists",
+        "class_analysis": results,
+        "unjustified_count": len(unjustified),
+        "summary": (
+            f"{len(unjustified)} equipment classes with time-based replacement strategies show "
+            f"random failure distributions (CV > 0.8). For these classes, scheduled replacement "
+            f"intervals have no statistical relationship with failure occurrence — the asset is "
+            f"equally likely to fail the day after replacement as just before it."
+        ),
+    }
+
+
+def get_h2_3_analysis(db: Session, platforms: list[str] | None = None, min_corrective_events: int = 3) -> dict:
+    """
+    H2.3: Maintenance effort not proportional to criticality.
+    Flags: high PM cost on low-criticality assets; high corrective rate on high-criticality assets.
+    """
+    tag_set = _asset_tags(db, platforms)
+    all_assets = _filter_assets(db.query(Asset), tag_set).all()
+    all_wos = _filter_wos(db.query(WorkOrder), tag_set).all()
+
+    asset_ppm_cost: dict = {}
+    asset_ppm_count: dict = {}
+    asset_cm_cost: dict = {}
+    asset_cm_count: dict = {}
+
+    for wo in all_wos:
+        cost = wo.actual_cost or wo.estimated_cost or 0
+        if wo.wo_type in ("PPM", "Statutory"):
+            asset_ppm_cost[wo.asset_tag] = asset_ppm_cost.get(wo.asset_tag, 0) + cost
+            asset_ppm_count[wo.asset_tag] = asset_ppm_count.get(wo.asset_tag, 0) + 1
+        elif wo.wo_type == "Corrective":
+            asset_cm_cost[wo.asset_tag] = asset_cm_cost.get(wo.asset_tag, 0) + cost
+            asset_cm_count[wo.asset_tag] = asset_cm_count.get(wo.asset_tag, 0) + 1
+
+    by_crit: dict = {}
+    for a in all_assets:
+        c = a.criticality
+        if c not in by_crit:
+            by_crit[c] = {"asset_count": 0, "ppm_cost": 0.0, "cm_cost": 0.0, "ppm_wos": 0, "cm_wos": 0}
+        by_crit[c]["asset_count"] += 1
+        by_crit[c]["ppm_cost"] += asset_ppm_cost.get(a.tag, 0)
+        by_crit[c]["cm_cost"] += asset_cm_cost.get(a.tag, 0)
+        by_crit[c]["ppm_wos"] += asset_ppm_count.get(a.tag, 0)
+        by_crit[c]["cm_wos"] += asset_cm_count.get(a.tag, 0)
+
+    summary_by_crit = []
+    for crit in sorted(by_crit.keys()):
+        info = by_crit[crit]
+        n = max(info["asset_count"], 1)
+        summary_by_crit.append({
+            "criticality": crit,
+            "asset_count": info["asset_count"],
+            "avg_annual_ppm_cost": round(info["ppm_cost"] / n / DATASET_YEARS, 0),
+            "avg_annual_cm_cost": round(info["cm_cost"] / n / DATASET_YEARS, 0),
+            "avg_annual_ppm_wos": round(info["ppm_wos"] / n / DATASET_YEARS, 1),
+            "avg_annual_cm_events": round(info["cm_wos"] / n / DATASET_YEARS, 2),
+            "cm_to_ppm_ratio_pct": round(info["cm_cost"] / max(info["ppm_cost"], 1) * 100, 1),
+        })
+
+    # Specific misalignment assets: high-criticality with high corrective rate
+    under_invested = []
+    for a in all_assets:
+        if a.criticality == "A" and asset_cm_count.get(a.tag, 0) >= min_corrective_events:
+            under_invested.append({
+                "asset_tag": a.tag,
+                "equipment_class": a.equipment_class,
+                "platform": a.platform,
+                "system": a.system,
+                "annual_ppm_cost": round(asset_ppm_cost.get(a.tag, 0) / DATASET_YEARS, 0),
+                "corrective_events_total": asset_cm_count.get(a.tag, 0),
+                "total_cm_cost": round(asset_cm_cost.get(a.tag, 0), 0),
+            })
+    under_invested.sort(key=lambda x: x["corrective_events_total"], reverse=True)
+
+    # Over-maintained low-criticality: Criticality C assets with above-average PPM cost
+    crit_c_info = by_crit.get("C", {})
+    crit_a_info = by_crit.get("A", {})
+    n_c = max(crit_c_info.get("asset_count", 1), 1)
+    n_a = max(crit_a_info.get("asset_count", 1), 1)
+    avg_c_ppm = crit_c_info.get("ppm_cost", 0) / n_c / DATASET_YEARS
+    avg_a_ppm = crit_a_info.get("ppm_cost", 0) / n_a / DATASET_YEARS
+
+    over_maintained = []
+    for a in all_assets:
+        if a.criticality == "C":
+            annual_ppm = asset_ppm_cost.get(a.tag, 0) / DATASET_YEARS
+            if annual_ppm > avg_c_ppm * 1.5:
+                over_maintained.append({
+                    "asset_tag": a.tag,
+                    "equipment_class": a.equipment_class,
+                    "platform": a.platform,
+                    "annual_ppm_cost": round(annual_ppm, 0),
+                    "vs_criticality_a_avg": round(annual_ppm / max(avg_a_ppm, 1) * 100, 0),
+                    "corrective_events_total": asset_cm_count.get(a.tag, 0),
+                })
+    over_maintained.sort(key=lambda x: x["annual_ppm_cost"], reverse=True)
+
+    crit_c_row = next((r for r in summary_by_crit if r["criticality"] == "C"), None)
+    crit_a_row = next((r for r in summary_by_crit if r["criticality"] == "A"), None)
+
+    return {
+        "hypothesis": "H2.3",
+        "title": "Maintenance effort not proportional to equipment criticality",
+        "by_criticality": summary_by_crit,
+        "under_invested_assets": under_invested[:20],
+        "over_maintained_assets": over_maintained[:20],
+        "summary": (
+            f"Criticality A assets receive £{crit_a_row['avg_annual_ppm_cost']:,.0f}/asset/year in PPM investment "
+            f"vs £{crit_c_row['avg_annual_ppm_cost']:,.0f} for Criticality C assets. "
+            if crit_a_row and crit_c_row else ""
+        ) + (
+            f"{len(under_invested)} Criticality A (highest-risk) assets show {min_corrective_events}+ corrective events — "
+            f"a signal the current PM strategy is not preventing failures on the most critical equipment. "
+            f"{len(over_maintained)} Criticality C assets are receiving above-average PPM investment "
+            f"disproportionate to their risk classification."
+        ),
+    }
+
+
+def get_h2_4_analysis(db: Session, platforms: list[str] | None = None) -> dict:
+    """
+    H2.4: Compliance-driven maintenance exceeds regulatory/statutory minimums.
+    For each statutory task, compare the current interval vs the regulatory baseline.
+    Quantify the fleet cost of exceeding the minimum.
+    """
+    tag_set = _asset_tags(db, platforms)
+    results = []
+    total_excess = 0.0
+
+    for task_code, reg in REGULATORY_MINIMUMS.items():
+        strategy = db.query(MaintenanceStrategy).filter(MaintenanceStrategy.task_code == task_code).first()
+        current_interval = strategy.interval_days if strategy else reg.get("min_interval_days")
+        min_interval = reg["min_interval_days"]
+
+        if current_interval >= min_interval:
+            continue
+
+        q = db.query(WorkOrder).filter(
+            WorkOrder.task_code == task_code,
+            WorkOrder.status == "Completed",
+        )
+        wos = _filter_wos(q, tag_set).all()
+        if not wos:
+            continue
+
+        asset_count = len(set(w.asset_tag for w in wos))
+        costs = [w.actual_cost for w in wos if w.actual_cost]
+        avg_cost = float(np.mean(costs)) if costs else 0.0
+
+        wos_per_year_actual = 365 / current_interval
+        wos_per_year_min = 365 / min_interval
+        excess_per_year = wos_per_year_actual - wos_per_year_min
+        fleet_excess = round(excess_per_year * avg_cost * asset_count, 0)
+        total_excess += fleet_excess
+
+        results.append({
+            "task_code": task_code,
+            "task_description": reg["description"],
+            "regulation": reg["regulation"],
+            "current_interval_days": current_interval,
+            "regulatory_minimum_days": min_interval,
+            "frequency_multiplier": round(min_interval / current_interval, 1),
+            "asset_count": asset_count,
+            "avg_cost_per_wo": round(avg_cost, 0),
+            "annual_excess_fleet_cost": fleet_excess,
+            "notes": reg["notes"],
+        })
+
+    results.sort(key=lambda x: x["annual_excess_fleet_cost"], reverse=True)
+
+    return {
+        "hypothesis": "H2.4",
+        "title": "Compliance-driven maintenance exceeds regulatory and statutory minimums",
+        "statutory_tasks": results,
+        "total_annual_excess_cost": round(total_excess, 0),
+        "summary": (
+            f"{len(results)} statutory and compliance-driven task types are performed more frequently "
+            f"than the applicable regulation or standard requires. "
+            f"Excess work orders are being generated without evidence of incremental safety or reliability benefit beyond the regulatory baseline."
+        ),
+    }
