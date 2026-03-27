@@ -14,7 +14,8 @@ import json
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+def _client():
+    return anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
 
 
 class ChatMessage(BaseModel):
@@ -77,7 +78,7 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
 
-    response = client.messages.create(
+    response = _client().messages.create(
         model="claude-sonnet-4-6",
         max_tokens=2048,
         system=system_prompt,

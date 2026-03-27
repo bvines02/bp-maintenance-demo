@@ -3,10 +3,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from dotenv import load_dotenv
 import pandas as pd
 import io
 import os
 from datetime import datetime
+
+# Load .env before any other imports that read env vars
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 DIST_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 
