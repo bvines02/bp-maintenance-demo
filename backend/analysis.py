@@ -9,13 +9,35 @@ from database import Asset, WorkOrder, MaintenanceStrategy
 from typing import Optional
 
 
-def get_duty_standby_opportunities(db: Session) -> list[dict]:
+def _asset_tags(db: Session, platforms: list[str] | None) -> set[str] | None:
+    """Return the set of asset tags belonging to the selected platforms, or None for all."""
+    if not platforms:
+        return None
+    rows = db.query(Asset.tag).filter(Asset.platform.in_(platforms)).all()
+    return {r[0] for r in rows}
+
+
+def _filter_assets(q, tag_set: set[str] | None):
+    if tag_set is not None:
+        q = q.filter(Asset.tag.in_(tag_set))
+    return q
+
+
+def _filter_wos(q, tag_set: set[str] | None):
+    if tag_set is not None:
+        q = q.filter(WorkOrder.asset_tag.in_(tag_set))
+    return q
+
+
+def get_duty_standby_opportunities(db: Session, platforms: list[str] | None = None) -> list[dict]:
     """
     Identify assets in duty/standby pairs where the standby unit
     has the same maintenance strategy as the duty unit.
     Flags these as opportunities to extend the standby interval.
     """
-    assets = db.query(Asset).filter(Asset.paired_tag.isnot(None)).all()
+    tag_set = _asset_tags(db, platforms)
+    q = db.query(Asset).filter(Asset.paired_tag.isnot(None))
+    assets = _filter_assets(q, tag_set).all()
     seen_pairs = set()
     opportunities = []
 
@@ -77,17 +99,19 @@ def get_duty_standby_opportunities(db: Session) -> list[dict]:
     return sorted(opportunities, key=lambda x: x["potential_annual_saving"], reverse=True)
 
 
-def get_deferral_opportunities(db: Session, min_occurrences: int = 4, min_avg_deferral: int = 30) -> list[dict]:
+def get_deferral_opportunities(db: Session, min_occurrences: int = 4, min_avg_deferral: int = 30, platforms: list[str] | None = None) -> list[dict]:
     """
     Identify maintenance tasks that have been consistently deferred
     (completed significantly after scheduled date) with no resulting failures.
     These are candidates for interval extension.
     """
-    wos = db.query(WorkOrder).filter(
+    tag_set = _asset_tags(db, platforms)
+    q = db.query(WorkOrder).filter(
         WorkOrder.status == "Completed",
         WorkOrder.deferral_days.isnot(None),
         WorkOrder.deferral_days > 0,
-    ).all()
+    )
+    wos = _filter_wos(q, tag_set).all()
 
     if not wos:
         return []
@@ -163,16 +187,18 @@ def get_deferral_opportunities(db: Session, min_occurrences: int = 4, min_avg_de
     return sorted(opportunities, key=lambda x: x["avg_deferral_days"], reverse=True)
 
 
-def get_deferral_summary_by_task(db: Session) -> list[dict]:
+def get_deferral_summary_by_task(db: Session, platforms: list[str] | None = None) -> list[dict]:
     """
     Aggregate deferral patterns by task code across all assets.
     Used for fleet-level analysis.
     """
-    wos = db.query(WorkOrder).filter(
+    tag_set = _asset_tags(db, platforms)
+    q = db.query(WorkOrder).filter(
         WorkOrder.status == "Completed",
         WorkOrder.deferral_days.isnot(None),
         WorkOrder.deferral_days > 14,
-    ).all()
+    )
+    wos = _filter_wos(q, tag_set).all()
 
     data = {}
     for wo in wos:
@@ -204,8 +230,9 @@ def get_deferral_summary_by_task(db: Session) -> list[dict]:
     return sorted(results, key=lambda x: x["avg_deferral_days"], reverse=True)
 
 
-def get_cost_summary(db: Session) -> dict:
-    wos = db.query(WorkOrder).filter(WorkOrder.status == "Completed").all()
+def get_cost_summary(db: Session, platforms: list[str] | None = None) -> dict:
+    tag_set = _asset_tags(db, platforms)
+    wos = _filter_wos(db.query(WorkOrder).filter(WorkOrder.status == "Completed"), tag_set).all()
     total_actual = sum(w.actual_cost or 0 for w in wos)
     total_estimated = sum(w.estimated_cost or 0 for w in wos)
     ppm_cost = sum(w.actual_cost or 0 for w in wos if w.wo_type == "PPM")
@@ -217,11 +244,11 @@ def get_cost_summary(db: Session) -> dict:
         d = w.discipline or "Unknown"
         by_discipline[d] = by_discipline.get(d, 0) + (w.actual_cost or 0)
 
-    assets = db.query(Asset).all()
+    assets = _filter_assets(db.query(Asset), tag_set).all()
     duty_standby_pairs = sum(1 for a in assets if a.paired_tag and a.operating_status == "Duty")
 
-    ds_opps = get_duty_standby_opportunities(db)
-    def_opps = get_deferral_opportunities(db)
+    ds_opps = get_duty_standby_opportunities(db, platforms)
+    def_opps = get_deferral_opportunities(db, platforms=platforms)
     total_potential_saving = sum(o["potential_annual_saving"] for o in ds_opps) + sum(o["potential_annual_saving"] for o in def_opps)
 
     return {
@@ -238,18 +265,19 @@ def get_cost_summary(db: Session) -> dict:
     }
 
 
-def get_h1_1_analysis(db: Session) -> dict:
+def get_h1_1_analysis(db: Session, platforms: list[str] | None = None) -> dict:
     """
     H1.1: PM schedules more conservative than equipment requires.
     Evidence: (a) tasks consistently deferred with no corrective uptick,
     (b) fleet-wide deferral vs corrective correlation.
     """
+    tag_set = _asset_tags(db, platforms)
     # Get all deferred tasks (>14 days late) grouped by asset+task
-    deferred_wos = db.query(WorkOrder).filter(
+    deferred_wos = _filter_wos(db.query(WorkOrder).filter(
         WorkOrder.wo_type.in_(["PPM", "Statutory"]),
         WorkOrder.status == "Completed",
         WorkOrder.deferral_days > 14,
-    ).all()
+    ), tag_set).all()
 
     # For each asset, count deferrals and corrective events per year
     asset_years: dict = {}
@@ -261,7 +289,7 @@ def get_h1_1_analysis(db: Session) -> dict:
         asset_years.setdefault(key, {"deferrals": 0, "corrective": 0})
         asset_years[key]["deferrals"] += 1
 
-    corrective_wos = db.query(WorkOrder).filter(WorkOrder.wo_type == "Corrective").all()
+    corrective_wos = _filter_wos(db.query(WorkOrder).filter(WorkOrder.wo_type == "Corrective"), tag_set).all()
     for wo in corrective_wos:
         if not wo.scheduled_date:
             continue
@@ -326,7 +354,7 @@ def get_h1_1_analysis(db: Session) -> dict:
 
     # Yearly trend: total deferrals vs total corrective by year
     yearly: dict = {}
-    all_wos = db.query(WorkOrder).all()
+    all_wos = _filter_wos(db.query(WorkOrder), tag_set).all()
     for wo in all_wos:
         if not wo.scheduled_date:
             continue
@@ -356,14 +384,15 @@ def get_h1_1_analysis(db: Session) -> dict:
     }
 
 
-def get_h1_2_analysis(db: Session) -> dict:
+def get_h1_2_analysis(db: Session, platforms: list[str] | None = None) -> dict:
     """
     H1.2: Duplicate or overlapping PM tasks on same equipment.
     Uses a component-function matrix to find tasks covering the same
     failure mode on the same equipment class, with savings estimates.
     """
+    tag_set = _asset_tags(db, platforms)
     strategies = db.query(MaintenanceStrategy).all()
-    all_wos = db.query(WorkOrder).filter(WorkOrder.wo_type.in_(["PPM", "Statutory"])).all()
+    all_wos = _filter_wos(db.query(WorkOrder).filter(WorkOrder.wo_type.in_(["PPM", "Statutory"])), tag_set).all()
 
     # Component-function taxonomy: each task maps to a component + function
     # Format: task_code -> (component, function)
@@ -482,7 +511,10 @@ def get_h1_2_analysis(db: Session) -> dict:
             annual_mob_saving = combined_opportunities_per_year * MOB_COST_SAVING
 
             # Fleet-level: multiply by number of assets with these tasks
-            asset_count = db.query(Asset).filter(Asset.equipment_class == eq_class).count()
+            aq = db.query(Asset).filter(Asset.equipment_class == eq_class)
+            if tag_set is not None:
+                aq = aq.filter(Asset.tag.in_(tag_set))
+            asset_count = aq.count()
             fleet_annual_saving = round(annual_mob_saving * asset_count, 0)
 
             # Total hours that could be saved (combined task = sum - 20% efficiency)
@@ -537,13 +569,14 @@ def get_h1_2_analysis(db: Session) -> dict:
     }
 
 
-def get_h1_3_analysis(db: Session) -> dict:
+def get_h1_3_analysis(db: Session, platforms: list[str] | None = None) -> dict:
     """
     H1.3: Corrective maintenance patterns reveal equipment classes
     where the preventive strategy is insufficient.
     Signals: repeat failures, high CM:PPM ratio, rising CM trend.
     """
-    all_wos = db.query(WorkOrder).all()
+    tag_set = _asset_tags(db, platforms)
+    all_wos = _filter_wos(db.query(WorkOrder), tag_set).all()
 
     # Corrective events per asset
     asset_corrective: dict = {}
@@ -633,9 +666,10 @@ def get_h1_3_analysis(db: Session) -> dict:
     }
 
 
-def get_corrective_summary(db: Session) -> dict:
+def get_corrective_summary(db: Session, platforms: list[str] | None = None) -> dict:
     """Summary of corrective (breakdown) work orders by class, failure mode, and discipline."""
-    wos = db.query(WorkOrder).filter(WorkOrder.wo_type == "Corrective").all()
+    tag_set = _asset_tags(db, platforms)
+    wos = _filter_wos(db.query(WorkOrder).filter(WorkOrder.wo_type == "Corrective"), tag_set).all()
 
     by_class: dict = {}
     by_failure_mode: dict = {}

@@ -5,6 +5,7 @@ import {
   LineChart, Line, Legend, ReferenceLine,
 } from "recharts";
 import { getH1_1, getH1_2, getH1_3 } from "../api";
+import { usePlatforms } from "../context/PlatformContext";
 
 // ─── Shared primitives ───────────────────────────────────────────────────────
 
@@ -74,7 +75,8 @@ const TICK = { fontSize: 11, fill: "#94a3b8" };
 // ─── H1.1 ────────────────────────────────────────────────────────────────────
 
 function H1_1() {
-  const { data, isLoading } = useQuery({ queryKey: ["h1-1"], queryFn: getH1_1 });
+  const { platformsParam } = usePlatforms();
+  const { data, isLoading } = useQuery({ queryKey: ["h1-1", platformsParam], queryFn: () => getH1_1(platformsParam) });
   const [showAll, setShowAll] = useState(false);
   if (isLoading) return <Loader />;
   if (!data) return null;
@@ -202,7 +204,8 @@ function H1_1() {
 // ─── H1.2 ────────────────────────────────────────────────────────────────────
 
 function H1_2() {
-  const { data, isLoading } = useQuery({ queryKey: ["h1-2"], queryFn: getH1_2 });
+  const { platformsParam } = usePlatforms();
+  const { data, isLoading } = useQuery({ queryKey: ["h1-2", platformsParam], queryFn: () => getH1_2(platformsParam) });
   const [expanded, setExpanded] = useState<number | null>(0);
   if (isLoading) return <Loader />;
   if (!data) return null;
@@ -340,7 +343,8 @@ function H1_2() {
 // ─── H1.3 ────────────────────────────────────────────────────────────────────
 
 function H1_3() {
-  const { data, isLoading } = useQuery({ queryKey: ["h1-3"], queryFn: getH1_3 });
+  const { platformsParam } = usePlatforms();
+  const { data, isLoading } = useQuery({ queryKey: ["h1-3", platformsParam], queryFn: () => getH1_3(platformsParam) });
   const [showAllAssets, setShowAllAssets] = useState(false);
   if (isLoading) return <Loader />;
   if (!data) return null;

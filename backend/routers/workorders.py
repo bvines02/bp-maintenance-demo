@@ -1,8 +1,18 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from database import get_db, WorkOrder
+from database import get_db, WorkOrder, Asset
 
 router = APIRouter(prefix="/workorders", tags=["workorders"])
+
+
+def _platform_tag_set(db: Session, platforms_raw: str | None):
+    if not platforms_raw:
+        return None
+    names = [p.strip() for p in platforms_raw.split(",") if p.strip()]
+    if not names:
+        return None
+    rows = db.query(Asset.tag).filter(Asset.platform.in_(names)).all()
+    return {r[0] for r in rows}
 
 
 @router.get("/")
@@ -12,10 +22,14 @@ def list_work_orders(
     task_code: str = Query(None),
     wo_type: str = Query(None),
     status: str = Query(None),
+    platforms: str = Query(None),
     skip: int = 0,
     limit: int = 200,
 ):
     q = db.query(WorkOrder)
+    tag_set = _platform_tag_set(db, platforms)
+    if tag_set is not None:
+        q = q.filter(WorkOrder.asset_tag.in_(tag_set))
     if asset_tag:
         q = q.filter(WorkOrder.asset_tag == asset_tag)
     if task_code:
@@ -33,8 +47,12 @@ def list_work_orders(
 
 
 @router.get("/summary")
-def work_order_summary(db: Session = Depends(get_db)):
-    wos = db.query(WorkOrder).all()
+def work_order_summary(db: Session = Depends(get_db), platforms: str = Query(None)):
+    tag_set = _platform_tag_set(db, platforms)
+    q = db.query(WorkOrder)
+    if tag_set is not None:
+        q = q.filter(WorkOrder.asset_tag.in_(tag_set))
+    wos = q.all()
     by_type: dict = {}
     by_status: dict = {}
     by_discipline: dict = {}

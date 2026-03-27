@@ -26,6 +26,7 @@ class Asset(Base):
     installation_year = Column(Integer)
     service_description = Column(String)
     discipline = Column(String)
+    platform = Column(String, nullable=True)
     work_orders = relationship("WorkOrder", back_populates="asset")
 
 

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getAssets } from "../api";
+import { usePlatforms } from "../context/PlatformContext";
 
 const critColor = (c: string) =>
   c === "A" ? "#ef4444" : c === "B" ? "#f59e0b" : "#10b981";
@@ -9,6 +10,7 @@ const statusColor = (s: string) =>
   s === "Duty" ? "#3b82f6" : s === "Standby" ? "#8b5cf6" : "#94a3b8";
 
 export default function AssetRegister() {
+  const { platformsParam } = usePlatforms();
   const [filter, setFilter] = useState({ equipment_class: "", criticality: "", operating_status: "" });
   const [page, setPage] = useState(0);
   const pageSize = 50;
@@ -18,7 +20,7 @@ export default function AssetRegister() {
   if (filter.criticality) params.criticality = filter.criticality;
   if (filter.operating_status) params.operating_status = filter.operating_status;
 
-  const { data } = useQuery({ queryKey: ["assets", params], queryFn: () => getAssets(params) });
+  const { data } = useQuery({ queryKey: ["assets", params, platformsParam], queryFn: () => getAssets(params, platformsParam) });
 
   const selectStyle = {
     background: "var(--surface2)",

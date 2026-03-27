@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { getAllOpportunities } from "../api";
+import { usePlatforms } from "../context/PlatformContext";
 
 interface Opportunity {
   type: "duty_standby" | "deferral_pattern";
@@ -42,9 +43,10 @@ const badge = (text: string, color: string) => (
 );
 
 export default function Opportunities() {
+  const { platformsParam } = usePlatforms();
   const { data, isLoading } = useQuery({
-    queryKey: ["opportunities"],
-    queryFn: getAllOpportunities,
+    queryKey: ["opportunities", platformsParam],
+    queryFn: () => getAllOpportunities(platformsParam),
   });
 
   if (isLoading) return <div style={{ color: "var(--muted)", padding: 40 }}>Analysing data...</div>;

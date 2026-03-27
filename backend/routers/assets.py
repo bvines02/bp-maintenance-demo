@@ -5,6 +5,14 @@ from database import get_db, Asset
 router = APIRouter(prefix="/assets", tags=["assets"])
 
 
+def _apply_platform_filter(q, platforms_raw: str | None):
+    if platforms_raw:
+        names = [p.strip() for p in platforms_raw.split(",") if p.strip()]
+        if names:
+            q = q.filter(Asset.platform.in_(names))
+    return q
+
+
 @router.get("/")
 def list_assets(
     db: Session = Depends(get_db),
@@ -12,10 +20,12 @@ def list_assets(
     system: str = Query(None),
     criticality: str = Query(None),
     operating_status: str = Query(None),
+    platforms: str = Query(None),
     skip: int = 0,
-    limit: int = 500,
+    limit: int = 1000,
 ):
     q = db.query(Asset)
+    q = _apply_platform_filter(q, platforms)
     if equipment_class:
         q = q.filter(Asset.equipment_class == equipment_class)
     if system:
@@ -43,6 +53,7 @@ def list_assets(
                 "installation_year": a.installation_year,
                 "service_description": a.service_description,
                 "discipline": a.discipline,
+                "platform": a.platform,
             }
             for a in assets
         ],
@@ -50,8 +61,10 @@ def list_assets(
 
 
 @router.get("/summary")
-def asset_summary(db: Session = Depends(get_db)):
-    assets = db.query(Asset).all()
+def asset_summary(db: Session = Depends(get_db), platforms: str = Query(None)):
+    q = db.query(Asset)
+    q = _apply_platform_filter(q, platforms)
+    assets = q.all()
     by_class: dict = {}
     by_criticality: dict = {}
     by_status: dict = {}

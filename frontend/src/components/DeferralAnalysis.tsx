@@ -3,6 +3,7 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
 } from "recharts";
 import { getDeferralSummary } from "../api";
+import { usePlatforms } from "../context/PlatformContext";
 
 interface DeferralRow {
   task_code: string;
@@ -15,9 +16,10 @@ interface DeferralRow {
 }
 
 export default function DeferralAnalysis() {
+  const { platformsParam } = usePlatforms();
   const { data, isLoading } = useQuery({
-    queryKey: ["deferral-summary"],
-    queryFn: getDeferralSummary,
+    queryKey: ["deferral-summary", platformsParam],
+    queryFn: () => getDeferralSummary(platformsParam),
   });
 
   if (isLoading) return <div style={{ color: "var(--muted)", padding: 40 }}>Loading deferral data...</div>;

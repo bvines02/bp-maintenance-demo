@@ -4,18 +4,20 @@ import {
   PieChart, Pie, Legend,
 } from "recharts";
 import { getCorrectiveSummary, getWorkOrders } from "../api";
+import { usePlatforms } from "../context/PlatformContext";
 
 const COLORS = ["#ef4444", "#f59e0b", "#3b82f6", "#8b5cf6", "#10b981", "#ec4899", "#06b6d4"];
 const fmt = (v: number) => `£${(v / 1000).toFixed(0)}k`;
 
 export default function CorrectiveMaintenance() {
+  const { platformsParam } = usePlatforms();
   const { data: summary, isLoading } = useQuery({
-    queryKey: ["corrective-summary"],
-    queryFn: getCorrectiveSummary,
+    queryKey: ["corrective-summary", platformsParam],
+    queryFn: () => getCorrectiveSummary(platformsParam),
   });
   const { data: recentWOs } = useQuery({
-    queryKey: ["corrective-wos"],
-    queryFn: () => getWorkOrders({ wo_type: "Corrective", limit: "100" }),
+    queryKey: ["corrective-wos", platformsParam],
+    queryFn: () => getWorkOrders({ wo_type: "Corrective", limit: "100" }, platformsParam),
   });
 
   if (isLoading) return <div style={{ color: "var(--muted)", padding: 40 }}>Loading corrective data...</div>;

@@ -72,6 +72,7 @@ def _load_demo_data(db: Session):
             installation_year=int(row["installation_year"]),
             service_description=row["service_description"],
             discipline=row["discipline"],
+            platform=row["platform"] if pd.notna(row.get("platform")) else None,
         ))
     db.commit()
 
@@ -137,6 +138,15 @@ def _load_demo_data(db: Session):
         db.commit()
 
     print("Demo data loaded successfully.")
+
+
+@app.get("/platforms")
+def list_platforms():
+    from data_generator import PLATFORMS
+    return [
+        {"name": p["name"], "code": p["code"], "description": p["description"]}
+        for p in PLATFORMS
+    ]
 
 
 @app.get("/")

@@ -5,15 +5,17 @@ import {
 } from "recharts";
 import { getCostSummary, getAssetSummary, getWorkOrderSummary } from "../api";
 import KpiCard from "./KpiCard";
+import { usePlatforms } from "../context/PlatformContext";
 
 const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
 
 const fmt = (v: number) => `£${(v / 1000).toFixed(0)}k`;
 
 export default function Dashboard() {
-  const { data: cost } = useQuery({ queryKey: ["cost-summary"], queryFn: getCostSummary });
-  const { data: assets } = useQuery({ queryKey: ["asset-summary"], queryFn: getAssetSummary });
-  const { data: wos } = useQuery({ queryKey: ["wo-summary"], queryFn: getWorkOrderSummary });
+  const { platformsParam } = usePlatforms();
+  const { data: cost } = useQuery({ queryKey: ["cost-summary", platformsParam], queryFn: () => getCostSummary(platformsParam) });
+  const { data: assets } = useQuery({ queryKey: ["asset-summary", platformsParam], queryFn: () => getAssetSummary(platformsParam) });
+  const { data: wos } = useQuery({ queryKey: ["wo-summary", platformsParam], queryFn: () => getWorkOrderSummary(platformsParam) });
 
   if (!cost || !assets || !wos) {
     return (
