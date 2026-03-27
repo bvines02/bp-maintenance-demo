@@ -12,7 +12,12 @@ from datetime import datetime
 # Load .env before any other imports that read env vars
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
-DIST_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+# Resolve DIST_DIR robustly regardless of working directory.
+# Primary: relative to this file's location (works when run from any cwd).
+# Fallback: relative to cwd (e.g. /app when run as `python backend/main.py`).
+_file_relative = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist"))
+_cwd_relative  = os.path.abspath(os.path.join(os.getcwd(), "frontend", "dist"))
+DIST_DIR = _file_relative if os.path.isdir(_file_relative) else _cwd_relative
 
 from database import init_db, SessionLocal, Asset, WorkOrder, MaintenanceStrategy
 from routers import assets, workorders, analysis_router, chat
@@ -42,8 +47,11 @@ app.include_router(chat.router)
 
 @app.on_event("startup")
 def startup():
+    print(f"[startup] DIST_DIR resolved to: {DIST_DIR}")
+    print(f"[startup] DIST_DIR exists: {os.path.isdir(DIST_DIR)}")
     init_db()
     # Auto-load demo data if DB is empty
+
     db = SessionLocal()
     try:
         if db.query(Asset).count() == 0:
