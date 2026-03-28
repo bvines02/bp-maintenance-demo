@@ -17,10 +17,10 @@ type Tab = "dashboard" | "hypotheses" | "deferral" | "corrective" | "assets" | "
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Overview" },
   { id: "hypotheses", label: "Hypothesis Testing" },
+  { id: "proposals", label: "Strategy Proposals" },
   { id: "deferral", label: "Deferral Analysis" },
   { id: "corrective", label: "Corrective Maintenance" },
   { id: "assets", label: "Asset Register" },
-  { id: "proposals", label: "Strategy Proposals" },
 ];
 
 const PLATFORM_COLORS: Record<string, string> = {
