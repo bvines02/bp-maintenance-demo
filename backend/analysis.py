@@ -1295,8 +1295,8 @@ def get_strategy_proposals(db: Session, platforms: list[str] | None = None) -> d
     # ── Build proposals ───────────────────────────────────────────────────────
     proposals = []
     for (eq_class, task_code), grp in groups.items():
-        # Need meaningful evidence: at least 8 deferrals across 3+ assets
-        if len(grp["deferrals"]) < 8 or len(grp["assets"]) < 3:
+        # Need meaningful evidence: at least 5 deferrals across 2+ assets
+        if len(grp["deferrals"]) < 5 or len(grp["assets"]) < 2:
             continue
 
         strategy = strategy_map.get(task_code)
@@ -1304,7 +1304,7 @@ def get_strategy_proposals(db: Session, platforms: list[str] | None = None) -> d
             continue
 
         avg_deferral = float(np.mean(grp["deferrals"]))
-        if avg_deferral < 20:
+        if avg_deferral < 14:
             continue
 
         # Proposed interval: extend by 75% of average deferral
@@ -1354,10 +1354,10 @@ def get_strategy_proposals(db: Session, platforms: list[str] | None = None) -> d
 
         # MoC readiness
         occurrences = len(grp["deferrals"])
-        if band_delta <= 1 and occurrences >= 15 and failures <= total_assets_in_class:
+        if band_delta <= 1 and occurrences >= 10 and failures <= total_assets_in_class:
             moc_readiness = "ready"
             moc_label = "Ready to submit"
-        elif band_delta <= 1 and occurrences >= 8:
+        elif band_delta <= 1 and occurrences >= 5:
             moc_readiness = "review"
             moc_label = "Engineering review recommended"
         else:
@@ -1493,6 +1493,247 @@ def get_strategy_proposals(db: Session, platforms: list[str] | None = None) -> d
             "evidence_hypotheses": evidence_hypotheses,
             "justification": justification,
         })
+
+    # ── H2.1-driven proposals: empirical MTBF >> PM interval ─────────────────
+    # Generate a proposal for any class/task where MTBF >= 2.5× interval,
+    # even when there is no deferral evidence.
+    covered_pairs: set = {(p["equipment_class"], p["task_code"]) for p in proposals}
+
+    for cls, mtbf in class_mtbf.items():
+        if not mtbf:
+            continue
+        cls_strats = [s for s in all_strategies
+                      if s.equipment_class == cls
+                      and s.basis in ("Time-based", "Condition-based")]
+        for strategy in cls_strats:
+            if (cls, strategy.task_code) in covered_pairs:
+                continue
+            ratio = mtbf / strategy.interval_days
+            if ratio < 2.5:
+                continue
+            class_asset_tags = eq_class_tags.get(cls, [])
+            if len(class_asset_tags) < 2:
+                continue
+
+            # Conservative extension: 1.5× current, capped at MTBF / 3
+            proposed_interval = min(int(strategy.interval_days * 1.5), max(strategy.interval_days + 60, int(mtbf / 3)))
+
+            failures_cls = eq_class_failures.get(cls, 0)
+            total_cls = len(class_asset_tags)
+            failure_rate = failures_cls / (total_cls * YEARS_SPAN)
+
+            class_crits = [asset_map[t].criticality for t in class_asset_tags if t in asset_map]
+            from collections import Counter as _Counter
+            crit_ctr = _Counter(class_crits)
+            dominant_crit = crit_ctr.most_common(1)[0][0] if crit_ctr else "3"
+            consequence = _consequence_score(dominant_crit)
+
+            cur_l = _likelihood_score(failure_rate)
+            cur_score = cur_l * consequence
+            cur_band = _risk_band(cur_score)
+
+            ext_ratio = proposed_interval / strategy.interval_days
+            prop_rate = failure_rate * (ext_ratio ** 0.5)
+            prop_l = _likelihood_score(prop_rate)
+            prop_score = prop_l * consequence
+            prop_band = _risk_band(prop_score)
+            b_delta = _risk_band_rank(prop_band) - _risk_band_rank(cur_band)
+
+            if b_delta > 1:
+                continue
+
+            alarp_s = "Risk neutral or improved" if b_delta <= 0 else "Acceptable with compensating measures"
+            alarp_d = ("MTBF-driven interval extension does not increase risk band. Change is ALARP-justified."
+                       if b_delta <= 0 else
+                       "Risk increase is within acceptable range when compensating measures are applied.")
+            measures = COMPENSATING_MEASURES_MAP.get(cls, DEFAULT_MEASURES)
+
+            moc_r = "ready" if (b_delta <= 0 and total_cls >= 8) else "review"
+            moc_l = "Ready to submit" if moc_r == "ready" else "Engineering review recommended"
+
+            wpy_cur = 365.0 / strategy.interval_days
+            wpy_prop = 365.0 / proposed_interval
+            hrs_saved = round((wpy_cur - wpy_prop) * strategy.estimated_hours * total_cls, 1)
+
+            just = [{
+                "hypothesis": "H2.1",
+                "type": "MTBF vs PM Interval",
+                "finding": (
+                    f"Empirical mean time between failures for {cls} is {int(mtbf)} days "
+                    f"({ratio:.1f}× the current PM interval of {strategy.interval_days} days). "
+                    f"The observed failure history indicates the current schedule is significantly "
+                    f"more conservative than the actual failure behaviour of this equipment class warrants."
+                ),
+                "strength": "strong" if ratio >= 4.0 else "moderate",
+            }]
+
+            ppm_c = eq_class_ppm_count.get(cls, 0)
+            cm_c = eq_class_failures.get(cls, 0)
+            cm_pct = (cm_c / ppm_c * 100) if ppm_c > 0 else None
+            if cm_pct is not None and cm_pct < 15:
+                just.append({
+                    "hypothesis": "H1.3",
+                    "type": "Low Corrective Rate",
+                    "finding": (
+                        f"{cls} corrective:PPM ratio is {cm_pct:.1f}% ({cm_c} corrective vs {ppm_c} planned "
+                        f"completions over 6 years). Low corrective incidence confirms the current "
+                        f"PM programme has headroom relative to the failure rate."
+                    ),
+                    "strength": "supporting",
+                })
+
+            proposals.append({
+                "id": f"H21-{cls[:3].upper()}-{strategy.task_code}",
+                "equipment_class": cls,
+                "task_code": strategy.task_code,
+                "task_description": strategy.task_description,
+                "discipline": strategy.discipline,
+                "current_interval_days": strategy.interval_days,
+                "proposed_interval_days": proposed_interval,
+                "affected_assets": total_cls,
+                "dominant_criticality": dominant_crit,
+                "deferral_evidence": {"occurrences": 0, "avg_deferral_days": 0.0, "max_deferral_days": 0},
+                "failure_data": {"total_failures": failures_cls, "assets_in_class": total_cls, "failure_rate_per_year": round(failure_rate, 3)},
+                "risk": {
+                    "current_likelihood": cur_l, "current_likelihood_label": LIKELIHOOD_LABELS[cur_l],
+                    "current_consequence": consequence, "current_consequence_label": CONSEQUENCE_LABELS[consequence],
+                    "current_score": cur_score, "current_band": cur_band,
+                    "proposed_likelihood": prop_l, "proposed_likelihood_label": LIKELIHOOD_LABELS[prop_l],
+                    "proposed_consequence": consequence, "proposed_consequence_label": CONSEQUENCE_LABELS[consequence],
+                    "proposed_score": prop_score, "proposed_band": prop_band,
+                    "risk_delta": prop_score - cur_score, "band_delta": b_delta,
+                    "alarp_status": alarp_s, "alarp_description": alarp_d,
+                    "compensating_measures": measures,
+                },
+                "moc_readiness": moc_r,
+                "moc_label": moc_l,
+                "total_hours_saved_per_year": hrs_saved,
+                "evidence_hypotheses": [j["hypothesis"] for j in just],
+                "justification": just,
+            })
+            covered_pairs.add((cls, strategy.task_code))
+
+    # ── H1.4-driven proposals: standby-specific interval extension ────────────
+    # For each class where duty fails materially more than standby,
+    # propose 2× interval for standby assets on applicable tasks.
+    covered_pairs_h14: set = {(p["equipment_class"], p["task_code"]) for p in proposals}
+
+    for cls, stats in class_standby_stats.items():
+        rate_ratios = stats.get("rate_ratios", [])
+        if not rate_ratios:
+            continue
+        avg_ratio = float(np.mean(rate_ratios))
+        if avg_ratio < 1.5:
+            continue
+
+        standby_asset_tags = [t for t in eq_class_tags.get(cls, []) if t in standby_tags]
+        if len(standby_asset_tags) < 2:
+            continue
+
+        cls_strats = [s for s in all_strategies
+                      if s.equipment_class == cls
+                      and s.applies_to_standby
+                      and s.basis in ("Time-based", "Condition-based")]
+
+        for strategy in cls_strats:
+            prop_id = f"H14-{cls[:3].upper()}-{strategy.task_code}"
+            if (cls, strategy.task_code) in covered_pairs_h14:
+                continue
+
+            proposed_interval = strategy.interval_days * 2
+
+            sb_failures = sum(len(asset_failure_dates.get(t, [])) for t in standby_asset_tags)
+            sb_rate = sb_failures / (len(standby_asset_tags) * YEARS_SPAN)
+
+            sb_crits = [asset_map[t].criticality for t in standby_asset_tags if t in asset_map]
+            from collections import Counter as _Counter
+            crit_ctr = _Counter(sb_crits)
+            dominant_crit = crit_ctr.most_common(1)[0][0] if crit_ctr else "2"
+            consequence = _consequence_score(dominant_crit)
+
+            cur_l = _likelihood_score(sb_rate)
+            cur_score = cur_l * consequence
+            cur_band = _risk_band(cur_score)
+            ext_ratio = proposed_interval / strategy.interval_days
+            prop_rate = sb_rate * (ext_ratio ** 0.5)
+            prop_l = _likelihood_score(prop_rate)
+            prop_score = prop_l * consequence
+            prop_band = _risk_band(prop_score)
+            b_delta = _risk_band_rank(prop_band) - _risk_band_rank(cur_band)
+
+            if b_delta > 1:
+                continue
+
+            alarp_s = "Risk neutral or improved" if b_delta <= 0 else "Acceptable with compensating measures"
+            alarp_d = ("Standby-specific interval extension does not increase risk band. Change is ALARP-justified."
+                       if b_delta <= 0 else
+                       "Risk acceptable for standby units given lower operational stress and non-operating status.")
+            measures = COMPENSATING_MEASURES_MAP.get(cls, DEFAULT_MEASURES)
+
+            moc_r = "ready" if (b_delta <= 0 and len(standby_asset_tags) >= 3) else "review"
+            moc_l = "Ready to submit" if moc_r == "ready" else "Engineering review recommended"
+
+            wpy_cur = 365.0 / strategy.interval_days
+            wpy_prop = 365.0 / proposed_interval
+            hrs_saved = round((wpy_cur - wpy_prop) * strategy.estimated_hours * len(standby_asset_tags), 1)
+
+            just = [{
+                "hypothesis": "H1.4",
+                "type": "Equipment Redundancy",
+                "finding": (
+                    f"{len(standby_asset_tags)} standby {cls} assets currently share the same "
+                    f"{strategy.interval_days}-day PM interval as their duty counterparts. "
+                    f"Duty units in this class fail {avg_ratio:.1f}× more frequently than standby units, "
+                    f"confirming materially different operational stress profiles. "
+                    f"Extending the standby interval to {proposed_interval} days (2×) is supported "
+                    f"by the failure rate differential."
+                ),
+                "strength": "strong" if avg_ratio >= 2.0 else "moderate",
+            }]
+
+            mtbf_cls = class_mtbf.get(cls)
+            if mtbf_cls and mtbf_cls >= 1.5 * strategy.interval_days:
+                just.append({
+                    "hypothesis": "H2.1",
+                    "type": "MTBF vs PM Interval",
+                    "finding": (
+                        f"Class empirical MTBF ({int(mtbf_cls)}d) is "
+                        f"{mtbf_cls / strategy.interval_days:.1f}× the current interval — "
+                        f"further supporting the case for extension on standby assets."
+                    ),
+                    "strength": "supporting",
+                })
+
+            proposals.append({
+                "id": prop_id,
+                "equipment_class": cls,
+                "task_code": strategy.task_code,
+                "task_description": f"[Standby] {strategy.task_description}",
+                "discipline": strategy.discipline,
+                "current_interval_days": strategy.interval_days,
+                "proposed_interval_days": proposed_interval,
+                "affected_assets": len(standby_asset_tags),
+                "dominant_criticality": dominant_crit,
+                "deferral_evidence": {"occurrences": 0, "avg_deferral_days": 0.0, "max_deferral_days": 0},
+                "failure_data": {"total_failures": sb_failures, "assets_in_class": len(standby_asset_tags), "failure_rate_per_year": round(sb_rate, 3)},
+                "risk": {
+                    "current_likelihood": cur_l, "current_likelihood_label": LIKELIHOOD_LABELS[cur_l],
+                    "current_consequence": consequence, "current_consequence_label": CONSEQUENCE_LABELS[consequence],
+                    "current_score": cur_score, "current_band": cur_band,
+                    "proposed_likelihood": prop_l, "proposed_likelihood_label": LIKELIHOOD_LABELS[prop_l],
+                    "proposed_consequence": consequence, "proposed_consequence_label": CONSEQUENCE_LABELS[consequence],
+                    "proposed_score": prop_score, "proposed_band": prop_band,
+                    "risk_delta": prop_score - cur_score, "band_delta": b_delta,
+                    "alarp_status": alarp_s, "alarp_description": alarp_d,
+                    "compensating_measures": measures,
+                },
+                "moc_readiness": moc_r,
+                "moc_label": moc_l,
+                "total_hours_saved_per_year": hrs_saved,
+                "evidence_hypotheses": [j["hypothesis"] for j in just],
+                "justification": just,
+            })
+            covered_pairs_h14.add((cls, strategy.task_code))
 
     # Sort by MoC readiness first, then by hours saved
     readiness_order = {"ready": 0, "review": 1, "insufficient": 2}
