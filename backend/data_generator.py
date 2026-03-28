@@ -368,34 +368,50 @@ DEFERRED_TASK_CODES = {
 }
 
 # Asset-level MTBF in days (before platform multiplier)
+# Calibrated against OREDA (Offshore Reliability Data) critical failure rates
 ASSET_MTBF = {
-    ("Centrifugal Pump",       "Duty"):    450,
-    ("Centrifugal Pump",       "Standby"): 1825,
-    ("Centrifugal Pump",       "Solo"):    450,
-    ("Reciprocating Pump",     "Duty"):    450,
-    ("Reciprocating Pump",     "Standby"): 1460,
-    ("Reciprocating Pump",     "Solo"):    450,
-    ("Centrifugal Compressor", "Duty"):    600,
-    ("Centrifugal Compressor", "Standby"): 1825,
-    ("Centrifugal Compressor", "Solo"):    600,
-    ("Gas Turbine Generator",  "Duty"):    365,
-    ("Gas Turbine Generator",  "Standby"): 1095,
-    ("Gas Turbine Generator",  "Solo"):    365,
-    ("Electric Motor",         "Solo"):    1825,
-    ("Pressure Vessel",        "Solo"):    4380,
-    ("Heat Exchanger",         "Solo"):    730,
-    ("Control Valve",          "Solo"):    900,
-    ("Pressure Transmitter",   "Solo"):    1460,
-    ("Flow Meter",             "Solo"):    1095,
-    ("Fire & Gas Detector",    "Solo"):    2190,
-    ("Switchgear Panel",       "Solo"):    2190,
-    ("UPS",                    "Duty"):    1825,
-    ("UPS",                    "Standby"): 3650,
-    ("UPS",                    "Solo"):    1825,
-    ("Fan / Blower",           "Duty"):    520,
-    ("Fan / Blower",           "Standby"): 1825,
-    ("Fan / Blower",           "Solo"):    520,
-    ("Safety Valve",           "Solo"):    2190,
+    # Centrifugal Pump: OREDA 0.3–0.8/yr → target ~0.5/yr duty → 730d
+    ("Centrifugal Pump",       "Duty"):    730,
+    ("Centrifugal Pump",       "Standby"): 2920,
+    ("Centrifugal Pump",       "Solo"):    730,
+    # Reciprocating Pump: OREDA 0.5–1.5/yr → target ~0.75/yr → 487d
+    ("Reciprocating Pump",     "Duty"):    487,
+    ("Reciprocating Pump",     "Standby"): 1825,
+    ("Reciprocating Pump",     "Solo"):    487,
+    # Centrifugal Compressor: OREDA 0.2–0.5/yr → target ~0.3/yr → 1095d
+    ("Centrifugal Compressor", "Duty"):    1095,
+    ("Centrifugal Compressor", "Standby"): 3650,
+    ("Centrifugal Compressor", "Solo"):    1095,
+    # Gas Turbine Generator: OREDA 0.1–0.3/yr → target ~0.15/yr → 2190d
+    ("Gas Turbine Generator",  "Duty"):    2190,
+    ("Gas Turbine Generator",  "Standby"): 6570,
+    ("Gas Turbine Generator",  "Solo"):    2190,
+    # Electric Motor: OREDA 0.05–0.2/yr → target ~0.15/yr → 2190d
+    ("Electric Motor",         "Solo"):    2190,
+    # Pressure Vessel: OREDA 0.01–0.05/yr → target ~0.03/yr → 12000d
+    ("Pressure Vessel",        "Solo"):    12000,
+    # Heat Exchanger: OREDA 0.05–0.2/yr → target ~0.1/yr → 3650d
+    ("Heat Exchanger",         "Solo"):    3650,
+    # Control Valve: OREDA 0.1–0.5/yr → target ~0.3/yr → 1095d
+    ("Control Valve",          "Solo"):    1095,
+    # Pressure Transmitter: OREDA 0.05–0.2/yr → target ~0.1/yr → 3650d
+    ("Pressure Transmitter",   "Solo"):    3650,
+    # Flow Meter: OREDA 0.1–0.3/yr → target ~0.2/yr → 1825d
+    ("Flow Meter",             "Solo"):    1825,
+    # Fire & Gas Detector: OREDA 0.05–0.15/yr → target ~0.08/yr → 4380d
+    ("Fire & Gas Detector",    "Solo"):    4380,
+    # Switchgear Panel: OREDA 0.05–0.15/yr → target ~0.08/yr → 4380d
+    ("Switchgear Panel",       "Solo"):    4380,
+    # UPS: OREDA 0.05–0.15/yr → target ~0.1/yr → 3650d
+    ("UPS",                    "Duty"):    3650,
+    ("UPS",                    "Standby"): 7300,
+    ("UPS",                    "Solo"):    3650,
+    # Fan / Blower: OREDA 0.3–0.8/yr → target ~0.5/yr → 730d
+    ("Fan / Blower",           "Duty"):    730,
+    ("Fan / Blower",           "Standby"): 2920,
+    ("Fan / Blower",           "Solo"):    730,
+    # Safety Valve: OREDA 0.05–0.2/yr → target ~0.1/yr → 3650d
+    ("Safety Valve",           "Solo"):    3650,
 }
 
 
