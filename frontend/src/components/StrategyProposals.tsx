@@ -27,6 +27,13 @@ interface RiskDetail {
   compensating_measures: string[];
 }
 
+interface JustificationItem {
+  hypothesis: string;
+  type: string;
+  finding: string;
+  strength: "strong" | "moderate" | "supporting";
+}
+
 interface Proposal {
   id: string;
   equipment_class: string;
@@ -44,6 +51,7 @@ interface Proposal {
   moc_label: string;
   total_hours_saved_per_year: number;
   evidence_hypotheses: string[];
+  justification: JustificationItem[];
 }
 
 interface ProposalsData {
@@ -279,6 +287,16 @@ function ProposalCard({ proposal, selected, onClick }: { proposal: Proposal; sel
           <span style={{ fontWeight: 600, color: "#3b82f6" }}>{proposal.total_hours_saved_per_year}</span>
         </div>
       </div>
+      <div style={{ display: "flex", gap: 4, marginTop: 8, flexWrap: "wrap" }}>
+        {(proposal.justification ?? []).map(j => (
+          <span key={j.hypothesis} style={{
+            padding: "1px 6px", borderRadius: 3, fontSize: 10, fontWeight: 600,
+            background: j.strength === "strong" ? "#10b98118" : j.strength === "moderate" ? "#3b82f618" : "#64748b18",
+            color: j.strength === "strong" ? "#10b981" : j.strength === "moderate" ? "#3b82f6" : "#64748b",
+            border: `1px solid ${j.strength === "strong" ? "#10b98133" : j.strength === "moderate" ? "#3b82f633" : "#64748b33"}`,
+          }}>{j.hypothesis} · {j.type}</span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -402,34 +420,39 @@ function DetailPanel({ proposal }: { proposal: Proposal }) {
         )}
       </div>
 
-      {/* Evidence */}
+      {/* Basis for Change */}
       <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 16 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Supporting Evidence</div>
-        <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginBottom: 12 }}>
-          <div>
-            <div style={{ fontSize: 11, color: "var(--muted)" }}>Deferral occurrences</div>
-            <div style={{ fontSize: 20, fontWeight: 700 }}>{proposal.deferral_evidence.occurrences}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: "var(--muted)" }}>Avg deferral</div>
-            <div style={{ fontSize: 20, fontWeight: 700 }}>{proposal.deferral_evidence.avg_deferral_days}d</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: "var(--muted)" }}>Max deferral</div>
-            <div style={{ fontSize: 20, fontWeight: 700 }}>{proposal.deferral_evidence.max_deferral_days}d</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: "var(--muted)" }}>Failure rate</div>
-            <div style={{ fontSize: 20, fontWeight: 700 }}>{proposal.failure_data.failure_rate_per_year.toFixed(2)}/yr</div>
-          </div>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Basis for Change</div>
+        <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>
+          All evidence strands supporting this strategy change proposal
         </div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {proposal.evidence_hypotheses.map(h => (
-            <span key={h} style={{
-              padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
-              background: "#3b82f622", color: "#3b82f6", border: "1px solid #3b82f644",
-            }}>{h}</span>
-          ))}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {(proposal.justification ?? []).map((j, i) => {
+            const strengthColor = j.strength === "strong" ? "#10b981" : j.strength === "moderate" ? "#3b82f6" : "#64748b";
+            const strengthLabel = j.strength === "strong" ? "Strong" : j.strength === "moderate" ? "Moderate" : "Supporting";
+            return (
+              <div key={i} style={{
+                border: `1px solid ${strengthColor}33`,
+                borderLeft: `3px solid ${strengthColor}`,
+                borderRadius: 6,
+                padding: "10px 14px",
+                background: strengthColor + "0a",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <span style={{
+                    padding: "1px 7px", borderRadius: 3, fontSize: 11, fontWeight: 700,
+                    background: "#3b82f622", color: "#3b82f6", border: "1px solid #3b82f644",
+                  }}>{j.hypothesis}</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#94a3b8" }}>{j.type}</span>
+                  <span style={{
+                    marginLeft: "auto", fontSize: 10, fontWeight: 600,
+                    color: strengthColor, textTransform: "uppercase", letterSpacing: "0.05em",
+                  }}>{strengthLabel}</span>
+                </div>
+                <div style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.65 }}>{j.finding}</div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -510,7 +533,7 @@ export default function StrategyProposals() {
       </div>
 
       <InsightBanner>
-        {data.ready_for_moc} proposals ready for MoC submission · {data.total_hours_saved_per_year} engineering hours recoverable per year · {data.total_proposals} change candidates identified from deferral evidence
+        {data.ready_for_moc} proposals ready for MoC submission · {data.total_hours_saved_per_year} engineering hours recoverable per year · each proposal justified across multiple evidence strands (deferral patterns, MTBF vs interval, CM:PPM ratio, redundancy analysis)
       </InsightBanner>
 
       {/* Filter tabs */}

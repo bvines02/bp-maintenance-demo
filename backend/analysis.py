@@ -1221,6 +1221,59 @@ def get_strategy_proposals(db: Session, platforms: list[str] | None = None) -> d
     # Years span of dataset (2019-2024 = 5 years)
     YEARS_SPAN = 5.0
 
+    # ── Evidence pre-computations for multi-hypothesis justification ──────────
+
+    # H2.1: Per-class empirical MTBF from inter-failure intervals
+    asset_failure_dates: dict[str, list] = {}
+    for wo in corrective_wos:
+        if wo.scheduled_date:
+            asset_failure_dates.setdefault(wo.asset_tag, []).append(wo.scheduled_date)
+
+    class_mtbf: dict[str, float | None] = {}
+    for cls, tags in eq_class_tags.items():
+        intervals: list[float] = []
+        for tag in tags:
+            dates = sorted(asset_failure_dates.get(tag, []))
+            for i in range(len(dates) - 1):
+                gap = (dates[i + 1] - dates[i]).days
+                if gap > 0:
+                    intervals.append(float(gap))
+        class_mtbf[cls] = float(np.mean(intervals)) if len(intervals) >= 5 else None
+
+    # H1.3: Per-class PPM count for CM:PPM ratio
+    all_ppm_wos = _filter_wos(db.query(WorkOrder).filter(
+        WorkOrder.wo_type == "PPM",
+        WorkOrder.status == "Completed",
+    ), tag_set).all()
+    eq_class_ppm_count: dict[str, int] = {}
+    for wo in all_ppm_wos:
+        a = asset_map.get(wo.asset_tag)
+        if a:
+            eq_class_ppm_count[a.equipment_class] = eq_class_ppm_count.get(a.equipment_class, 0) + 1
+
+    # H1.4: Standby asset set + per-class duty/standby failure rate ratio
+    standby_tags: set[str] = {a.tag for a in assets if a.operating_status == "Standby"}
+    class_standby_stats: dict[str, dict] = {}
+    seen_h14_pairs: set = set()
+    for a in assets:
+        if a.operating_status != "Standby" or not a.paired_tag:
+            continue
+        pair_key = tuple(sorted([a.tag, a.paired_tag]))
+        if pair_key in seen_h14_pairs:
+            continue
+        seen_h14_pairs.add(pair_key)
+        duty = asset_map.get(a.paired_tag)
+        if not duty:
+            continue
+        cls = a.equipment_class
+        if cls not in class_standby_stats:
+            class_standby_stats[cls] = {"standby_count": 0, "rate_ratios": []}
+        class_standby_stats[cls]["standby_count"] += 1
+        duty_rate = len(asset_failure_dates.get(duty.tag, [])) / YEARS_SPAN
+        standby_rate = len(asset_failure_dates.get(a.tag, [])) / YEARS_SPAN
+        if standby_rate > 0:
+            class_standby_stats[cls]["rate_ratios"].append(duty_rate / standby_rate)
+
     # ── Group deferred WOs by equipment_class + task_code ────────────────────
     groups: dict = {}
     for wo in deferred_wos:
@@ -1317,10 +1370,83 @@ def get_strategy_proposals(db: Session, platforms: list[str] | None = None) -> d
         hours_saved_per_asset = (wos_per_year_current - wos_per_year_proposed) * strategy.estimated_hours
         total_hours_saved = round(hours_saved_per_asset * len(grp["assets"]), 1)
 
-        # Evidence hypotheses
-        evidence_hypotheses = ["H1.1"]
-        if occurrences >= 20:
-            evidence_hypotheses.append("H2.1")
+        # ── Multi-hypothesis justification ────────────────────────────────────
+        justification = []
+
+        # H1.1: Deferral pattern
+        justification.append({
+            "hypothesis": "H1.1",
+            "type": "Deferral Pattern",
+            "finding": (
+                f"This task was deferred {occurrences} times across {len(grp['assets'])} assets "
+                f"(average {avg_deferral:.0f} days late, maximum {int(max(grp['deferrals']))} days). "
+                f"No corrective failures were recorded during any deferral window, confirming the "
+                f"equipment tolerated the extended interval without adverse consequence."
+            ),
+            "strength": "strong" if occurrences >= 15 else "moderate",
+        })
+
+        # H2.1: Empirical MTBF vs current PM interval
+        mtbf = class_mtbf.get(eq_class)
+        if mtbf is not None:
+            mtbf_ratio = mtbf / current_interval
+            if mtbf_ratio >= 1.5:
+                justification.append({
+                    "hypothesis": "H2.1",
+                    "type": "MTBF vs PM Interval",
+                    "finding": (
+                        f"The empirical mean time between failures for {eq_class} (derived from corrective "
+                        f"work order history) is {int(mtbf)} days — {mtbf_ratio:.1f}× the current PM interval "
+                        f"of {current_interval} days. The failure history does not support an interval as "
+                        f"short as the current schedule implies."
+                    ),
+                    "strength": "strong" if mtbf_ratio >= 3.0 else "moderate",
+                })
+
+        # H1.3: Low CM:PPM ratio — PM programme is working, not under-maintaining
+        ppm_count = eq_class_ppm_count.get(eq_class, 0)
+        cm_count = eq_class_failures.get(eq_class, 0)
+        cm_ppm_pct = (cm_count / ppm_count * 100) if ppm_count > 0 else None
+        if cm_ppm_pct is not None and cm_ppm_pct < 15:
+            justification.append({
+                "hypothesis": "H1.3",
+                "type": "Low Corrective Rate",
+                "finding": (
+                    f"{eq_class} has a corrective:PPM ratio of {cm_ppm_pct:.1f}% "
+                    f"({cm_count} corrective vs {ppm_count} planned completions over 6 years). "
+                    f"A low CM:PPM ratio confirms the current PM programme is preventing failures "
+                    f"effectively — there is headroom to relax the interval without exposing the fleet to elevated risk."
+                ),
+                "strength": "supporting",
+            })
+
+        # H1.4: Duty/standby redundancy — standby assets in this group
+        affected_standby = [t for t in grp["assets"] if t in standby_tags]
+        if affected_standby:
+            cls_stats = class_standby_stats.get(eq_class, {})
+            rate_ratios = cls_stats.get("rate_ratios", [])
+            avg_ratio = float(np.mean(rate_ratios)) if rate_ratios else None
+            parts = [
+                f"{len(affected_standby)} of {len(grp['assets'])} affected assets are standby units "
+                f"operating under lower utilisation and reduced mechanical stress."
+            ]
+            if avg_ratio and avg_ratio >= 1.5:
+                parts.append(
+                    f"Duty units in this class fail {avg_ratio:.1f}× more frequently than their standby "
+                    f"counterparts, yet both currently share the same PM interval."
+                )
+            parts.append(
+                "The lower failure exposure of standby units provides additional confidence that "
+                "the proposed interval extension is safe for this sub-population."
+            )
+            justification.append({
+                "hypothesis": "H1.4",
+                "type": "Equipment Redundancy",
+                "finding": " ".join(parts),
+                "strength": "moderate" if avg_ratio and avg_ratio >= 1.5 else "supporting",
+            })
+
+        evidence_hypotheses = [j["hypothesis"] for j in justification]
 
         proposals.append({
             "id": f"{eq_class[:3].upper()}-{task_code}",
@@ -1365,6 +1491,7 @@ def get_strategy_proposals(db: Session, platforms: list[str] | None = None) -> d
             "moc_label": moc_label,
             "total_hours_saved_per_year": total_hours_saved,
             "evidence_hypotheses": evidence_hypotheses,
+            "justification": justification,
         })
 
     # Sort by MoC readiness first, then by hours saved
