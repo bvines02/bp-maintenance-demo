@@ -1,8 +1,19 @@
+import { useCountUp } from "../hooks/useCountUp";
+
 interface KpiCardProps {
   label: string;
   value: string | number;
   sub?: string;
   color?: string;
+}
+
+function AnimatedValue({ value, color }: { value: number; color: string }) {
+  const animated = useCountUp(value);
+  return (
+    <div style={{ fontSize: 28, fontWeight: 700, color, lineHeight: 1 }}>
+      {animated.toLocaleString()}
+    </div>
+  );
 }
 
 export default function KpiCard({ label, value, sub, color = "var(--accent)" }: KpiCardProps) {
@@ -18,9 +29,13 @@ export default function KpiCard({ label, value, sub, color = "var(--accent)" }: 
       <div style={{ color: "var(--muted)", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>
         {label}
       </div>
-      <div style={{ fontSize: 28, fontWeight: 700, color, lineHeight: 1 }}>
-        {typeof value === "number" ? value.toLocaleString() : value}
-      </div>
+      {typeof value === "number" ? (
+        <AnimatedValue value={value} color={color} />
+      ) : (
+        <div style={{ fontSize: 28, fontWeight: 700, color, lineHeight: 1 }}>
+          {value}
+        </div>
+      )}
       {sub && <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 6 }}>{sub}</div>}
     </div>
   );

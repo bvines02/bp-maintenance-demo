@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getStrategyProposals } from "../api";
 import { usePlatforms } from "../context/PlatformContext";
+import { SkeletonCard } from "./Skeleton";
+import InsightBanner from "./InsightBanner";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -465,7 +467,19 @@ export default function StrategyProposals() {
   });
 
   if (isLoading) {
-    return <div style={{ color: "var(--muted)", padding: 40, textAlign: "center" }}>Loading proposals...</div>;
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ display: "flex", gap: 12 }}>
+          <SkeletonCard /><SkeletonCard /><SkeletonCard /><SkeletonCard />
+        </div>
+        <div style={{ display: "flex", gap: 16, marginTop: 8 }}>
+          <div style={{ flex: "0 0 380px" }}>
+            <SkeletonCard lines={5} height={200} />
+          </div>
+          <SkeletonCard lines={8} height={400} />
+        </div>
+      </div>
+    );
   }
 
   if (!data || data.proposals.length === 0) {
@@ -494,6 +508,10 @@ export default function StrategyProposals() {
           </div>
         ))}
       </div>
+
+      <InsightBanner>
+        {data.ready_for_moc} proposals ready for MoC submission · {data.total_hours_saved_per_year} engineering hours recoverable per year · {data.total_proposals} change candidates identified from deferral evidence
+      </InsightBanner>
 
       {/* Filter tabs */}
       <div style={{ display: "flex", gap: 4 }}>

@@ -6,6 +6,8 @@ import {
 import { getCostSummary, getAssetSummary, getWorkOrderSummary } from "../api";
 import KpiCard from "./KpiCard";
 import { usePlatforms } from "../context/PlatformContext";
+import { SkeletonCard } from "./Skeleton";
+import InsightBanner from "./InsightBanner";
 
 const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
 
@@ -19,8 +21,13 @@ export default function Dashboard() {
 
   if (!cost || !assets || !wos) {
     return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 400, color: "var(--muted)" }}>
-        Loading dashboard data...
+      <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+          <SkeletonCard /><SkeletonCard /><SkeletonCard /><SkeletonCard />
+        </div>
+        <div style={{ display: "flex", gap: 16 }}>
+          <SkeletonCard lines={6} height={280} /><SkeletonCard lines={6} height={280} />
+        </div>
       </div>
     );
   }
@@ -40,6 +47,11 @@ export default function Dashboard() {
   const criticalityData = Object.entries(assets.by_criticality as Record<string, number>)
     .map(([name, value]) => ({ name: `Criticality ${name}`, value }));
 
+  const correctiveCount = wos.by_type?.Corrective ?? 0;
+  const ppmCount = wos.by_type?.PPM ?? 0;
+  const cmPmRatio = ppmCount > 0 ? Math.round((correctiveCount / ppmCount) * 100) : 0;
+  const annualSavingK = Math.round(cost.total_potential_annual_saving / 1000);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
       {/* KPI Row */}
@@ -54,6 +66,10 @@ export default function Dashboard() {
           color="var(--accent2)"
         />
       </div>
+
+      <InsightBanner>
+        {cost.total_assets} assets · {cost.total_work_orders} work orders (2019–2024) · CM:PM ratio {cmPmRatio}% · £{annualSavingK}k potential annual saving identified
+      </InsightBanner>
 
       {/* Cost breakdown row */}
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
