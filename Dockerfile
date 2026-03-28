@@ -22,10 +22,9 @@ RUN cd frontend && VITE_API_URL="" npm run build
 # ── Backend source ────────────────────────────────────────────────────────────
 COPY backend/ ./backend/
 
-# ── Pre-generate demo data and pre-load into SQLite (fast startup) ────────────
-RUN cd /app/backend && \
-    python3 -c "from data_generator import generate_all; generate_all('../demo_data')" && \
-    python3 preload.py
+# ── Pre-load demo data into SQLite (fast startup) ─────────────────────────────
+COPY demo_data/ ./demo_data/
+RUN cd /app/backend && python3 preload.py
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 EXPOSE 8000

@@ -4,5 +4,4 @@ backend/maintenance.db
 backend/.env
 frontend/node_modules/
 frontend/dist/
-demo_data/
 .git/
