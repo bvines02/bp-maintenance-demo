@@ -644,7 +644,7 @@ const HYPOTHESES: HypothesisEntry[] = [
 
 // ─── Root component ────────────────────────────────────────────────────────────
 
-export default function HypothesisTesting() {
+export default function HypothesisTesting({ onNavigate }: { onNavigate?: (tab: string) => void }) {
   const [activeId, setActiveId] = useState("h1-1");
   const [allParams, setAllParams] = useState<Record<string, Record<string, number>>>(
     Object.fromEntries(HYPOTHESES.map(h => [h.id, { ...h.defaults }]))
@@ -707,6 +707,41 @@ export default function HypothesisTesting() {
 
       {/* Active hypothesis content */}
       {active.render(params)}
+
+      {/* Link to Strategy Proposals for relevant hypotheses */}
+      {["h1-1", "h1-3", "h2-1"].includes(activeId) && onNavigate && (
+        <div style={{
+          background: "var(--surface)", border: "1px solid #1e3a5f",
+          borderLeft: "3px solid #3b82f6", borderRadius: 6,
+          padding: "14px 20px", display: "flex", alignItems: "center",
+          justifyContent: "space-between", gap: 16,
+        }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#93c5fd", marginBottom: 3 }}>
+              This analysis feeds into Strategy Proposals
+            </div>
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>
+              {activeId === "h1-1" && "Deferral evidence from H1.1 is used to generate interval extension candidates with 5×5 risk assessment."}
+              {activeId === "h1-3" && "Equipment classes with low CM rates identified here appear as lower-risk candidates in Strategy Proposals."}
+              {activeId === "h2-1" && "Over-conservative intervals flagged in H2.1 directly map to proposals with ALARP justification."}
+            </div>
+          </div>
+          <button
+            onClick={() => onNavigate("proposals")}
+            style={{
+              padding: "8px 18px", borderRadius: 6, fontSize: 13, fontWeight: 600,
+              background: "#3b82f6", color: "white", border: "none",
+              cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+              display: "flex", alignItems: "center", gap: 6,
+            }}
+          >
+            View Strategy Proposals
+            <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

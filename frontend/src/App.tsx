@@ -213,7 +213,7 @@ function AppInner() {
         {/* Content */}
         <main style={{ flex: 1, padding: "24px 32px" }}>
           {tab === "dashboard" && <Dashboard />}
-          {tab === "hypotheses" && <HypothesisTesting />}
+          {tab === "hypotheses" && <HypothesisTesting onNavigate={(t) => setTab(t as Tab)} />}
           {tab === "proposals" && <StrategyProposals />}
           {tab === "deferral" && <DeferralAnalysis />}
           {tab === "corrective" && <CorrectiveMaintenance />}

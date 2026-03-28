@@ -50,7 +50,6 @@ export default function Dashboard() {
   const correctiveCount = wos.by_type?.Corrective ?? 0;
   const ppmCount = wos.by_type?.PPM ?? 0;
   const cmPmRatio = ppmCount > 0 ? Math.round((correctiveCount / ppmCount) * 100) : 0;
-  const annualSavingK = Math.round(cost.total_potential_annual_saving / 1000);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
