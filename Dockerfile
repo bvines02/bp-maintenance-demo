@@ -17,7 +17,7 @@ COPY frontend/package*.json ./frontend/
 RUN cd frontend && npm ci
 
 COPY frontend/ ./frontend/
-RUN cd frontend && VITE_API_URL="" npm run build
+RUN cd frontend && npm run build
 
 # ── Backend source ────────────────────────────────────────────────────────────
 COPY backend/ ./backend/
