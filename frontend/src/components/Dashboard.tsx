@@ -59,16 +59,11 @@ export default function Dashboard() {
         <KpiCard label="Total Assets" value={cost.total_assets} sub={`${assets.duty_standby_pairs} duty/standby pairs`} />
         <KpiCard label="Work Orders (2019–2024)" value={cost.total_work_orders} />
         <KpiCard label="Total Maintenance Cost" value={`£${(cost.total_actual_cost / 1000000).toFixed(2)}M`} sub="2019–2024 actual" />
-        <KpiCard
-          label="Potential Annual Saving"
-          value={`£${(cost.total_potential_annual_saving / 1000).toFixed(0)}k`}
-          sub="Identified optimisation opportunities"
-          color="var(--accent2)"
-        />
+        <KpiCard label="CM : PM Ratio" value={`${cmPmRatio}%`} sub="Corrective as % of planned" />
       </div>
 
       <InsightBanner>
-        {cost.total_assets} assets · {cost.total_work_orders} work orders (2019–2024) · CM:PM ratio {cmPmRatio}% · £{annualSavingK}k potential annual saving identified
+        {cost.total_assets} assets across 5 platforms · {cost.total_work_orders.toLocaleString()} work orders (2019–2024) · CM:PM ratio {cmPmRatio}% · {assets.duty_standby_pairs} duty/standby pairs identified
       </InsightBanner>
 
       {/* Cost breakdown row */}
