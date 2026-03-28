@@ -1125,3 +1125,260 @@ def get_h2_4_analysis(db: Session, platforms: list[str] | None = None) -> dict:
             f"Excess work orders are being generated without evidence of incremental safety or reliability benefit beyond the regulatory baseline."
         ),
     }
+
+
+# ── Risk scoring helpers ───────────────────────────────────────────────────────
+
+LIKELIHOOD_LABELS = {1: "Rare", 2: "Unlikely", 3: "Possible", 4: "Likely", 5: "Almost Certain"}
+CONSEQUENCE_LABELS = {1: "Negligible", 2: "Minor", 3: "Moderate", 4: "Major", 5: "Catastrophic"}
+RISK_BAND_LABELS = {1: "Low", 2: "Medium", 3: "High", 4: "Extreme"}
+
+COMPENSATING_MEASURES_MAP: dict[str, list[str]] = {
+    "Centrifugal Pump": ["Enhanced operator inspection rounds", "Seal condition monitoring", "Vibration trend review"],
+    "Reciprocating Pump": ["Enhanced operator rounds", "Valve condition monitoring", "Oil analysis"],
+    "Centrifugal Compressor": ["Vibration monitoring", "Lube oil analysis", "Dry gas seal monitoring"],
+    "Reciprocating Compressor": ["Vibration monitoring", "Oil analysis", "Enhanced pre-start checks"],
+    "Gas Turbine Generator": ["Enhanced borescope inspection frequency", "Exhaust temperature monitoring"],
+    "Heat Exchanger": ["Process parameter monitoring", "Enhanced corrosion inspection"],
+    "Pressure Vessel": ["Corrosion allowance review", "Enhanced visual inspection"],
+    "Control Valve": ["Partial stroke testing", "Valve signature trending"],
+    "Fire & Gas Detector": ["Enhanced functional test programme", "Calibration check"],
+}
+DEFAULT_MEASURES = ["Enhanced operator surveillance", "Increased condition monitoring frequency", "Engineering sign-off required"]
+
+
+def _likelihood_score(failure_rate_per_year: float) -> int:
+    if failure_rate_per_year < 0.05:
+        return 1
+    elif failure_rate_per_year < 0.15:
+        return 2
+    elif failure_rate_per_year < 0.35:
+        return 3
+    elif failure_rate_per_year < 0.65:
+        return 4
+    return 5
+
+
+def _consequence_score(criticality: str) -> int:
+    return {"A": 4, "B": 3, "C": 2}.get(criticality, 2)
+
+
+def _risk_band(score: int) -> str:
+    if score <= 4:
+        return "Low"
+    elif score <= 9:
+        return "Medium"
+    elif score <= 16:
+        return "High"
+    return "Extreme"
+
+
+def _risk_band_rank(band: str) -> int:
+    return {"Low": 1, "Medium": 2, "High": 3, "Extreme": 4}.get(band, 1)
+
+
+def get_strategy_proposals(db: Session, platforms: list[str] | None = None) -> dict:
+    """
+    Generate fleet-level maintenance strategy change proposals with 5x5 risk assessment.
+    Each proposal is for an equipment_class + task_code combination, covering all affected assets.
+    """
+    from collections import Counter
+
+    tag_set = _asset_tags(db, platforms)
+
+    # ── Bulk pre-load everything ───────────────────────────────────────────────
+    assets = _filter_assets(db.query(Asset), tag_set).all()
+    asset_map: dict[str, Asset] = {a.tag: a for a in assets}
+
+    # Equipment class -> list of asset tags
+    eq_class_tags: dict[str, list[str]] = {}
+    for a in assets:
+        eq_class_tags.setdefault(a.equipment_class, []).append(a.tag)
+
+    # All PPM WOs with deferrals > 14 days
+    deferred_wos = _filter_wos(db.query(WorkOrder).filter(
+        WorkOrder.wo_type == "PPM",
+        WorkOrder.status == "Completed",
+        WorkOrder.deferral_days > 14,
+    ), tag_set).all()
+
+    # All corrective WOs
+    corrective_wos = _filter_wos(db.query(WorkOrder).filter(
+        WorkOrder.wo_type == "Corrective",
+    ), tag_set).all()
+
+    # Corrective count per equipment class
+    eq_class_failures: dict[str, int] = {}
+    for wo in corrective_wos:
+        a = asset_map.get(wo.asset_tag)
+        if a:
+            eq_class_failures[a.equipment_class] = eq_class_failures.get(a.equipment_class, 0) + 1
+
+    # All strategies
+    all_strategies = db.query(MaintenanceStrategy).all()
+    strategy_map: dict[str, MaintenanceStrategy] = {s.task_code: s for s in all_strategies}
+
+    # Years span of dataset (2019-2024 = 5 years)
+    YEARS_SPAN = 5.0
+
+    # ── Group deferred WOs by equipment_class + task_code ────────────────────
+    groups: dict = {}
+    for wo in deferred_wos:
+        a = asset_map.get(wo.asset_tag)
+        if not a:
+            continue
+        key = (a.equipment_class, wo.task_code)
+        if key not in groups:
+            groups[key] = {
+                "deferrals": [], "assets": set(), "criticalities": [],
+                "equipment_class": a.equipment_class,
+                "task_code": wo.task_code,
+                "task_description": wo.task_description,
+            }
+        groups[key]["deferrals"].append(wo.deferral_days)
+        groups[key]["assets"].add(wo.asset_tag)
+        groups[key]["criticalities"].append(a.criticality)
+
+    # ── Build proposals ───────────────────────────────────────────────────────
+    proposals = []
+    for (eq_class, task_code), grp in groups.items():
+        # Need meaningful evidence: at least 8 deferrals across 3+ assets
+        if len(grp["deferrals"]) < 8 or len(grp["assets"]) < 3:
+            continue
+
+        strategy = strategy_map.get(task_code)
+        if not strategy:
+            continue
+
+        avg_deferral = float(np.mean(grp["deferrals"]))
+        if avg_deferral < 20:
+            continue
+
+        # Proposed interval: extend by 75% of average deferral
+        current_interval = strategy.interval_days
+        proposed_interval = current_interval + int(avg_deferral * 0.75)
+
+        # Dominant criticality
+        crit_counter = Counter(grp["criticalities"])
+        dominant_crit = crit_counter.most_common(1)[0][0]
+        consequence = _consequence_score(dominant_crit)
+
+        # Failure rate per asset per year for this equipment class
+        total_assets_in_class = len(eq_class_tags.get(eq_class, []))
+        if total_assets_in_class == 0:
+            continue
+        failures = eq_class_failures.get(eq_class, 0)
+        failure_rate = failures / (total_assets_in_class * YEARS_SPAN)
+
+        # Current risk
+        current_likelihood = _likelihood_score(failure_rate)
+        current_score = current_likelihood * consequence
+        current_band = _risk_band(current_score)
+
+        # Proposed likelihood: failure probability increases with extension ratio (sqrt scaling)
+        extension_ratio = proposed_interval / current_interval
+        proposed_failure_rate = failure_rate * (extension_ratio ** 0.5)
+        proposed_likelihood = _likelihood_score(proposed_failure_rate)
+        proposed_score = proposed_likelihood * consequence
+        proposed_band = _risk_band(proposed_score)
+
+        risk_delta = proposed_score - current_score
+        band_delta = _risk_band_rank(proposed_band) - _risk_band_rank(current_band)
+
+        # ALARP status
+        if band_delta <= 0:
+            alarp_status = "Risk neutral or improved"
+            alarp_description = "Proposed interval extension does not increase risk band. Change is ALARP-justified."
+        elif band_delta == 1:
+            alarp_status = "Acceptable with compensating measures"
+            alarp_description = "Risk increases within acceptable range when compensating measures are applied."
+        else:
+            alarp_status = "Requires further assessment"
+            alarp_description = "Risk band increases by more than one level. Full FMEA review recommended before MoC submission."
+
+        # Compensating measures
+        measures = COMPENSATING_MEASURES_MAP.get(eq_class, DEFAULT_MEASURES)
+
+        # MoC readiness
+        occurrences = len(grp["deferrals"])
+        if band_delta <= 1 and occurrences >= 15 and failures <= total_assets_in_class:
+            moc_readiness = "ready"
+            moc_label = "Ready to submit"
+        elif band_delta <= 1 and occurrences >= 8:
+            moc_readiness = "review"
+            moc_label = "Engineering review recommended"
+        else:
+            moc_readiness = "insufficient"
+            moc_label = "Further evidence needed"
+
+        # Hours saved per year across all affected assets
+        wos_per_year_current = 365.0 / current_interval
+        wos_per_year_proposed = 365.0 / proposed_interval
+        hours_saved_per_asset = (wos_per_year_current - wos_per_year_proposed) * strategy.estimated_hours
+        total_hours_saved = round(hours_saved_per_asset * len(grp["assets"]), 1)
+
+        # Evidence hypotheses
+        evidence_hypotheses = ["H1.1"]
+        if occurrences >= 20:
+            evidence_hypotheses.append("H2.1")
+
+        proposals.append({
+            "id": f"{eq_class[:3].upper()}-{task_code}",
+            "equipment_class": eq_class,
+            "task_code": task_code,
+            "task_description": strategy.task_description,
+            "discipline": strategy.discipline,
+            "current_interval_days": current_interval,
+            "proposed_interval_days": proposed_interval,
+            "affected_assets": len(grp["assets"]),
+            "dominant_criticality": dominant_crit,
+            "deferral_evidence": {
+                "occurrences": occurrences,
+                "avg_deferral_days": round(avg_deferral, 1),
+                "max_deferral_days": int(max(grp["deferrals"])),
+            },
+            "failure_data": {
+                "total_failures": failures,
+                "assets_in_class": total_assets_in_class,
+                "failure_rate_per_year": round(failure_rate, 3),
+            },
+            "risk": {
+                "current_likelihood": current_likelihood,
+                "current_likelihood_label": LIKELIHOOD_LABELS[current_likelihood],
+                "current_consequence": consequence,
+                "current_consequence_label": CONSEQUENCE_LABELS[consequence],
+                "current_score": current_score,
+                "current_band": current_band,
+                "proposed_likelihood": proposed_likelihood,
+                "proposed_likelihood_label": LIKELIHOOD_LABELS[proposed_likelihood],
+                "proposed_consequence": consequence,
+                "proposed_consequence_label": CONSEQUENCE_LABELS[consequence],
+                "proposed_score": proposed_score,
+                "proposed_band": proposed_band,
+                "risk_delta": risk_delta,
+                "band_delta": band_delta,
+                "alarp_status": alarp_status,
+                "alarp_description": alarp_description,
+                "compensating_measures": measures,
+            },
+            "moc_readiness": moc_readiness,
+            "moc_label": moc_label,
+            "total_hours_saved_per_year": total_hours_saved,
+            "evidence_hypotheses": evidence_hypotheses,
+        })
+
+    # Sort by MoC readiness first, then by hours saved
+    readiness_order = {"ready": 0, "review": 1, "insufficient": 2}
+    proposals.sort(key=lambda x: (readiness_order[x["moc_readiness"]], -x["total_hours_saved_per_year"]))
+
+    total_hours = round(sum(p["total_hours_saved_per_year"] for p in proposals), 1)
+    ready_count = sum(1 for p in proposals if p["moc_readiness"] == "ready")
+    review_count = sum(1 for p in proposals if p["moc_readiness"] == "review")
+
+    return {
+        "total_proposals": len(proposals),
+        "total_hours_saved_per_year": total_hours,
+        "ready_for_moc": ready_count,
+        "require_review": review_count,
+        "proposals": proposals,
+    }

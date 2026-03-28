@@ -5,14 +5,14 @@ import AssetRegister from "./components/AssetRegister";
 import DeferralAnalysis from "./components/DeferralAnalysis";
 import CorrectiveMaintenance from "./components/CorrectiveMaintenance";
 import HypothesisTesting from "./components/HypothesisTesting";
-import Chat from "./components/Chat";
+import StrategyProposals from "./components/StrategyProposals";
 import { PlatformProvider, usePlatforms } from "./context/PlatformContext";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 5 * 60 * 1000, retry: 1 } },
 });
 
-type Tab = "dashboard" | "hypotheses" | "deferral" | "corrective" | "assets" | "chat";
+type Tab = "dashboard" | "hypotheses" | "deferral" | "corrective" | "assets" | "proposals";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Overview" },
@@ -20,7 +20,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "deferral", label: "Deferral Analysis" },
   { id: "corrective", label: "Corrective Maintenance" },
   { id: "assets", label: "Asset Register" },
-  { id: "chat", label: "Analyst Chat" },
+  { id: "proposals", label: "Strategy Proposals" },
 ];
 
 const PLATFORM_COLORS: Record<string, string> = {
@@ -181,7 +181,7 @@ function AppInner() {
         {tab === "hypotheses" && <p style={{ color: "var(--muted)", fontSize: 13, paddingBottom: 16 }}>Structured data-driven testing of maintenance optimisation hypotheses H1.1, H1.2, and H1.3</p>}
         {tab === "corrective" && <p style={{ color: "var(--muted)", fontSize: 13, paddingBottom: 16 }}>Breakdown and unplanned maintenance history — failure modes, costs, and downtime by equipment class</p>}
         {tab === "assets" && <p style={{ color: "var(--muted)", fontSize: 13, paddingBottom: 16 }}>Full asset register with duty/standby pairing and criticality classifications</p>}
-        {tab === "chat" && <p style={{ color: "var(--muted)", fontSize: 13, paddingBottom: 16 }}>Ask questions and test hypotheses against the maintenance dataset using AI analysis</p>}
+        {tab === "proposals" && <p style={{ color: "var(--muted)", fontSize: 13, paddingBottom: 16 }}>Data-driven strategy change proposals with 5×5 risk assessment and MoC readiness</p>}
       </div>
 
       {/* Content */}
@@ -191,7 +191,7 @@ function AppInner() {
         {tab === "deferral" && <DeferralAnalysis />}
         {tab === "corrective" && <CorrectiveMaintenance />}
         {tab === "assets" && <AssetRegister />}
-        {tab === "chat" && <Chat />}
+        {tab === "proposals" && <StrategyProposals />}
       </main>
     </div>
   );

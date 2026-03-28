@@ -30,3 +30,6 @@ export const getH2_3 = (platforms?: string, extra?: Record<string, unknown>) =>
 export const getH2_4 = (platforms?: string) => api.get("/analysis/hypothesis/h2-4", { params: p(platforms) }).then(r => r.data);
 export const sendChat = (messages: { role: string; content: string }[]) =>
   api.post("/chat/", { messages }).then(r => r.data);
+
+export const getStrategyProposals = (platforms?: string) =>
+  api.get("/analysis/strategy-proposals", { params: p(platforms) }).then(r => r.data);

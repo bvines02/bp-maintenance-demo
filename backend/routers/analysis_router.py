@@ -14,6 +14,7 @@ from analysis import (
     get_h2_2_analysis,
     get_h2_3_analysis,
     get_h2_4_analysis,
+    get_strategy_proposals,
 )
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
@@ -129,3 +130,8 @@ def all_opportunities(db: Session = Depends(get_db), platforms: str = Query(None
         "total_potential_annual_saving": round(total_saving, 2),
         "opportunities": all_opps,
     }
+
+
+@router.get("/strategy-proposals")
+def strategy_proposals(db: Session = Depends(get_db), platforms: str = Query(None)):
+    return get_strategy_proposals(db, parse_platforms(platforms))

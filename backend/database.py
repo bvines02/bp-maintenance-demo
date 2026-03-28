@@ -15,31 +15,31 @@ class Asset(Base):
     __tablename__ = "assets"
     tag = Column(String, primary_key=True)
     description = Column(String)
-    equipment_class = Column(String)
+    equipment_class = Column(String, index=True)
     system = Column(String)
     location = Column(String)
-    criticality = Column(String)
-    operating_status = Column(String)  # duty, standby, spare
+    criticality = Column(String, index=True)
+    operating_status = Column(String, index=True)  # duty, standby, spare
     paired_tag = Column(String, nullable=True)
     manufacturer = Column(String)
     model = Column(String)
     installation_year = Column(Integer)
     service_description = Column(String)
     discipline = Column(String)
-    platform = Column(String, nullable=True)
+    platform = Column(String, nullable=True, index=True)
     work_orders = relationship("WorkOrder", back_populates="asset")
 
 
 class WorkOrder(Base):
     __tablename__ = "work_orders"
     wo_number = Column(String, primary_key=True)
-    asset_tag = Column(String, ForeignKey("assets.tag"))
-    wo_type = Column(String)  # PPM, corrective, statutory
+    asset_tag = Column(String, ForeignKey("assets.tag"), index=True)
+    wo_type = Column(String, index=True)  # PPM, corrective, statutory
     task_description = Column(String)
     task_code = Column(String)
-    scheduled_date = Column(Date)
+    scheduled_date = Column(Date, index=True)
     actual_completion_date = Column(Date, nullable=True)
-    status = Column(String)  # completed, deferred, cancelled, open
+    status = Column(String, index=True)  # completed, deferred, cancelled, open
     estimated_hours = Column(Float)
     actual_hours = Column(Float, nullable=True)
     estimated_cost = Column(Float)
