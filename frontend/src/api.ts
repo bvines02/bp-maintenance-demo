@@ -21,6 +21,8 @@ export const getH1_1 = (platforms?: string, extra?: Record<string, unknown>) =>
 export const getH1_2 = (platforms?: string) => api.get("/analysis/hypothesis/h1-2", { params: p(platforms) }).then(r => r.data);
 export const getH1_3 = (platforms?: string, extra?: Record<string, unknown>) =>
   api.get("/analysis/hypothesis/h1-3", { params: { ...p(platforms), ...extra } }).then(r => r.data);
+export const getH1_4 = (platforms?: string) =>
+  api.get("/analysis/hypothesis/h1-4", { params: p(platforms) }).then(r => r.data);
 export const getH2_1 = (platforms?: string, extra?: Record<string, unknown>) =>
   api.get("/analysis/hypothesis/h2-1", { params: { ...p(platforms), ...extra } }).then(r => r.data);
 export const getH2_2 = (platforms?: string, extra?: Record<string, unknown>) =>
@@ -33,3 +35,9 @@ export const sendChat = (messages: { role: string; content: string }[]) =>
 
 export const getStrategyProposals = (platforms?: string) =>
   api.get("/analysis/strategy-proposals", { params: p(platforms) }).then(r => r.data);
+
+export const getWeibullAnalysis = (platforms?: string) =>
+  api.get("/analysis/weibull", { params: p(platforms) }).then(r => r.data);
+
+export const getSCERegister = (platforms?: string) =>
+  api.get("/analysis/sce-register", { params: p(platforms) }).then(r => r.data);

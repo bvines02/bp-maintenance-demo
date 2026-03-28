@@ -4,7 +4,7 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
   LineChart, Line, Legend, ReferenceLine,
 } from "recharts";
-import { getH1_1, getH1_2, getH1_3 } from "../api";
+import { getH1_1, getH1_2, getH1_3, getH1_4 } from "../api";
 import { usePlatforms } from "../context/PlatformContext";
 import { H2_1, H2_2, H2_3, H2_4 } from "./HypothesisTestingH2";
 
@@ -566,6 +566,132 @@ function ParamsPanel({
   );
 }
 
+function H1_4() {
+  const { platformsParam } = usePlatforms();
+  const { data, isLoading } = useQuery({
+    queryKey: ["h1-4", platformsParam],
+    queryFn: () => getH1_4(platformsParam),
+  });
+
+  if (isLoading) return <div style={{ color: "var(--muted)", padding: 40, textAlign: "center" }}>Loading analysis...</div>;
+  if (!data) return null;
+
+  const verdictColor = data.verdict === "supported" ? "#10b981" : data.verdict === "partial" ? "#f59e0b" : "#64748b";
+  const verdictLabel = data.verdict === "supported" ? "Supported" : data.verdict === "partial" ? "Partially Supported" : "Not Supported";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+
+      {/* Verdict + summary */}
+      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: verdictColor, background: verdictColor + "22", border: `1px solid ${verdictColor}44`, padding: "3px 10px", borderRadius: 4 }}>
+            {verdictLabel}
+          </span>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>H1.4 — Maintenance strategies do not account for equipment redundancy</span>
+        </div>
+        <p style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.7, margin: 0 }}>{data.summary}</p>
+      </div>
+
+      {/* KPI cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+        {[
+          { label: "Duty/Standby Pairs", value: data.total_pairs, color: "#3b82f6" },
+          { label: "Pairs with Higher Duty Rate", value: `${data.pct_with_higher_duty_rate}%`, color: "#f59e0b" },
+          { label: "Fleet Duty:Standby Ratio", value: data.fleet_rate_ratio ? `${data.fleet_rate_ratio}×` : "N/A", color: "#8b5cf6" },
+          { label: "Extension Candidates", value: data.extension_candidates.length, color: "#10b981" },
+        ].map(({ label, value, color }) => (
+          <div key={label} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: "14px 16px" }}>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>{label}</div>
+            <div style={{ fontSize: 26, fontWeight: 700, color }}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Failure rate comparison chart */}
+      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 20 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Duty vs Standby Failure Rate by Equipment Class</div>
+        <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 16 }}>Failures per asset per year — confirms different operational stress profiles</div>
+        <ResponsiveContainer width="100%" height={260}>
+          <BarChart data={data.failure_rate_by_class.filter((e: any) => e.pair_count > 0)} margin={{ left: 0, right: 10 }}>
+            <XAxis dataKey="equipment_class" tick={{ fontSize: 10, fill: "#64748b" }} interval={0} angle={-20} textAnchor="end" height={50} />
+            <YAxis tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={(v: number) => v.toFixed(2)} />
+            <Tooltip
+              contentStyle={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 6, fontSize: 12 }}
+              formatter={(v: number, name: string) => [`${v.toFixed(3)} failures/yr`, name === "avg_duty_failure_rate" ? "Duty" : "Standby"]}
+            />
+            <Legend formatter={(v: string) => v === "avg_duty_failure_rate" ? "Duty" : "Standby"} />
+            <Bar dataKey="avg_duty_failure_rate" name="avg_duty_failure_rate" fill="#3b82f6" radius={[3, 3, 0, 0]} />
+            <Bar dataKey="avg_standby_failure_rate" name="avg_standby_failure_rate" fill="#10b981" radius={[3, 3, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Extension candidates */}
+      {data.extension_candidates.length > 0 && (
+        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Standby Interval Extension Candidates</div>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 16 }}>
+            Equipment classes where duty failure rate is ≥1.5× standby — standby interval extension is justified
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {data.extension_candidates.map((ec: any) => (
+              <div key={ec.equipment_class} style={{ border: "1px solid var(--border)", borderRadius: 6, padding: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                  <div>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>{ec.equipment_class}</span>
+                    <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: 10 }}>{ec.pair_count} pairs</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 16, fontSize: 12 }}>
+                    <span><span style={{ color: "var(--muted)" }}>Duty: </span><span style={{ fontWeight: 600, color: "#3b82f6" }}>{ec.avg_duty_failure_rate.toFixed(3)}/yr</span></span>
+                    <span><span style={{ color: "var(--muted)" }}>Standby: </span><span style={{ fontWeight: 600, color: "#10b981" }}>{ec.avg_standby_failure_rate.toFixed(3)}/yr</span></span>
+                    <span style={{ fontWeight: 700, color: "#f59e0b" }}>{ec.rate_ratio}× ratio</span>
+                  </div>
+                </div>
+                {ec.condition_tasks.length > 0 && (
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                        <th style={{ textAlign: "left", padding: "4px 8px", color: "var(--muted)", fontWeight: 500 }}>Task</th>
+                        <th style={{ textAlign: "center", padding: "4px 8px", color: "var(--muted)", fontWeight: 500 }}>Current Interval</th>
+                        <th style={{ textAlign: "center", padding: "4px 8px", color: "var(--muted)", fontWeight: 500 }}>Proposed Standby</th>
+                        <th style={{ textAlign: "center", padding: "4px 8px", color: "var(--muted)", fontWeight: 500 }}>Change</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ec.condition_tasks.slice(0, 5).map((t: any) => (
+                        <tr key={t.task_code} style={{ borderBottom: "1px solid var(--border)" }}>
+                          <td style={{ padding: "6px 8px" }}>
+                            <span style={{ fontFamily: "monospace", fontSize: 11, color: "#3b82f6", marginRight: 8 }}>{t.task_code}</span>
+                            {t.task_description}
+                          </td>
+                          <td style={{ padding: "6px 8px", textAlign: "center" }}>{t.interval_days}d</td>
+                          <td style={{ padding: "6px 8px", textAlign: "center", fontWeight: 600, color: "#10b981" }}>{t.proposed_standby_interval}d</td>
+                          <td style={{ padding: "6px 8px", textAlign: "center", color: "#10b981", fontWeight: 600 }}>+100%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Engineering rationale */}
+      <div style={{ background: "var(--surface)", border: "1px solid #1e3a5f", borderLeft: "3px solid #3b82f6", borderRadius: 6, padding: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#93c5fd", marginBottom: 8 }}>Engineering Basis for Standby Interval Extension</div>
+        <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.8 }}>
+          <strong style={{ color: "#e2e8f0" }}>Consequence differentiation:</strong> Standby failure does not cause production loss — it reduces system redundancy. The appropriate response is recovery to full redundancy within a defined timeframe, not an equivalent PM burden to duty assets.<br />
+          <strong style={{ color: "#e2e8f0" }}>Stress-based justification:</strong> Standby assets experience lower cyclic stress, fewer starts/stops, and reduced thermal cycling. OREDA data consistently shows 2–4× lower failure rates on standby vs duty for rotating equipment.<br />
+          <strong style={{ color: "#e2e8f0" }}>RCM precedent:</strong> RCM methodology (MSG-3, IEC 60300) explicitly allows different maintenance tasks and intervals for redundant equipment based on the hidden vs evident failure distinction and system consequence analysis.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Hypothesis registry ───────────────────────────────────────────────────────
 
 type HypothesisEntry = {
@@ -602,6 +728,13 @@ const HYPOTHESES: HypothesisEntry[] = [
       min_repeat_failures: { label: "Min repeat failures to flag", min: 2, max: 8, step: 1 },
     },
     render: (p) => <H1_3 params={p as { cm_ppm_threshold: number; min_repeat_failures: number }} />,
+  },
+  {
+    id: "h1-4", code: "H1.4", group: "H1",
+    title: "Strategies ignore equipment redundancy",
+    description: "Identical intervals applied to duty and standby despite different stress profiles",
+    defaults: {}, paramDefs: {},
+    render: () => <H1_4 />,
   },
   {
     id: "h2-1", code: "H2.1", group: "H2",
@@ -709,7 +842,7 @@ export default function HypothesisTesting({ onNavigate }: { onNavigate?: (tab: s
       {active.render(params)}
 
       {/* Link to Strategy Proposals for relevant hypotheses */}
-      {["h1-1", "h1-3", "h2-1"].includes(activeId) && onNavigate && (
+      {["h1-1", "h1-3", "h1-4", "h2-1"].includes(activeId) && onNavigate && (
         <div style={{
           background: "var(--surface)", border: "1px solid #1e3a5f",
           borderLeft: "3px solid #3b82f6", borderRadius: 6,
@@ -723,6 +856,7 @@ export default function HypothesisTesting({ onNavigate }: { onNavigate?: (tab: s
             <div style={{ fontSize: 12, color: "var(--muted)" }}>
               {activeId === "h1-1" && "Deferral evidence from H1.1 is used to generate interval extension candidates with 5×5 risk assessment."}
               {activeId === "h1-3" && "Equipment classes with low CM rates identified here appear as lower-risk candidates in Strategy Proposals."}
+              {activeId === "h1-4" && "Standby interval extension candidates from H1.4 appear as Strategy Proposals with risk assessment and MoC readiness."}
               {activeId === "h2-1" && "Over-conservative intervals flagged in H2.1 directly map to proposals with ALARP justification."}
             </div>
           </div>

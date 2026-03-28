@@ -10,11 +10,14 @@ from analysis import (
     get_h1_1_analysis,
     get_h1_2_analysis,
     get_h1_3_analysis,
+    get_h1_4_analysis,
     get_h2_1_analysis,
     get_h2_2_analysis,
     get_h2_3_analysis,
     get_h2_4_analysis,
     get_strategy_proposals,
+    get_weibull_analysis,
+    get_sce_analysis,
 )
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
@@ -154,3 +157,18 @@ def all_opportunities(db: Session = Depends(get_db), platforms: str = Query(None
 @router.get("/strategy-proposals")
 def strategy_proposals(db: Session = Depends(get_db), platforms: str = Query(None)):
     return _cached(f"strategy-proposals:{platforms}", lambda: get_strategy_proposals(db, parse_platforms(platforms)))
+
+
+@router.get("/hypothesis/h1-4")
+def hypothesis_h1_4(db: Session = Depends(get_db), platforms: str = Query(None)):
+    return _cached(f"h1-4:{platforms}", lambda: get_h1_4_analysis(db, parse_platforms(platforms)))
+
+
+@router.get("/weibull")
+def weibull_analysis(db: Session = Depends(get_db), platforms: str = Query(None)):
+    return _cached(f"weibull:{platforms}", lambda: get_weibull_analysis(db, parse_platforms(platforms)))
+
+
+@router.get("/sce-register")
+def sce_register(db: Session = Depends(get_db), platforms: str = Query(None)):
+    return _cached(f"sce:{platforms}", lambda: get_sce_analysis(db, parse_platforms(platforms)))

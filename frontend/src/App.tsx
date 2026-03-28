@@ -2,10 +2,11 @@ import { useState } from "react";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import Dashboard from "./components/Dashboard";
 import AssetRegister from "./components/AssetRegister";
-import DeferralAnalysis from "./components/DeferralAnalysis";
 import CorrectiveMaintenance from "./components/CorrectiveMaintenance";
 import HypothesisTesting from "./components/HypothesisTesting";
 import StrategyProposals from "./components/StrategyProposals";
+import WeibullAnalysis from "./components/WeibullAnalysis";
+import SCERegister from "./components/SCERegister";
 import { PlatformProvider, usePlatforms } from "./context/PlatformContext";
 import { getStrategyProposals } from "./api";
 
@@ -13,13 +14,14 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 5 * 60 * 1000, retry: 1 } },
 });
 
-type Tab = "dashboard" | "hypotheses" | "proposals" | "deferral" | "corrective" | "assets";
+type Tab = "dashboard" | "hypotheses" | "proposals" | "weibull" | "sce" | "corrective" | "assets";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Overview" },
   { id: "hypotheses", label: "Hypothesis Testing" },
   { id: "proposals", label: "Strategy Proposals" },
-  { id: "deferral", label: "Deferral Analysis" },
+  { id: "weibull", label: "Weibull Analysis" },
+  { id: "sce", label: "SCE Register" },
   { id: "corrective", label: "Corrective Maintenance" },
   { id: "assets", label: "Asset Register" },
 ];
@@ -28,7 +30,8 @@ const TAB_DESCRIPTIONS: Record<Tab, string> = {
   dashboard: "Multi-platform maintenance performance overview — 2019 to 2024",
   hypotheses: "Structured data-driven testing of maintenance optimisation hypotheses",
   proposals: "Data-driven strategy change proposals with 5×5 risk assessment and MoC readiness",
-  deferral: "Tasks consistently completed late without resulting failures — candidates for interval extension",
+  weibull: "Weibull β analysis per equipment class — failure mode classification and PM strategy implications",
+  sce: "Safety Critical Elements and statutory inspection register — excluded from all optimisation scope",
   corrective: "Breakdown and unplanned maintenance history — failure modes and downtime by equipment class",
   assets: "Full asset register with duty/standby pairing and criticality classifications",
 };
@@ -47,7 +50,8 @@ function NavIcon({ id, active }: { id: Tab; active: boolean }) {
     dashboard: "M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z",
     hypotheses: ["M9 3v8L5 18c-.6 1 .2 2 1.5 2h11c1.3 0 2.1-1 1.5-2L15 11V3", "M9 3h6", "M8 7h8"],
     proposals: "M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z",
-    deferral: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z",
+    weibull: ["M3 20l5-10 4 6 3-4 6 8", "M3 20h18"],
+    sce: ["M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"],
     corrective: ["M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"],
     assets: ["M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7", "M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4", "M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"],
   };
@@ -215,7 +219,8 @@ function AppInner() {
           {tab === "dashboard" && <Dashboard />}
           {tab === "hypotheses" && <HypothesisTesting onNavigate={(t) => setTab(t as Tab)} />}
           {tab === "proposals" && <StrategyProposals />}
-          {tab === "deferral" && <DeferralAnalysis />}
+          {tab === "weibull" && <WeibullAnalysis />}
+          {tab === "sce" && <SCERegister />}
           {tab === "corrective" && <CorrectiveMaintenance />}
           {tab === "assets" && <AssetRegister />}
         </main>

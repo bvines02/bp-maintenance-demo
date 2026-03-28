@@ -1382,3 +1382,522 @@ def get_strategy_proposals(db: Session, platforms: list[str] | None = None) -> d
         "require_review": review_count,
         "proposals": proposals,
     }
+
+
+def get_h1_4_analysis(db: Session, platforms: list[str] | None = None) -> dict:
+    """
+    H1.4: Maintenance strategies do not account for equipment redundancy.
+    Duty and standby assets share identical PM intervals despite different
+    operational stress profiles and failure consequences.
+    Evidence: duty units fail more frequently than standby; yet both
+    receive identical PM intervals — standby intervals can be safely extended.
+    """
+    tag_set = _asset_tags(db, platforms)
+
+    # Bulk load
+    all_assets = _filter_assets(db.query(Asset), tag_set).all()
+    asset_map: dict[str, Asset] = {a.tag: a for a in all_assets}
+
+    corrective_wos = _filter_wos(
+        db.query(WorkOrder).filter(WorkOrder.wo_type == "Corrective"), tag_set
+    ).all()
+
+    asset_corrective: dict[str, int] = {}
+    for wo in corrective_wos:
+        asset_corrective[wo.asset_tag] = asset_corrective.get(wo.asset_tag, 0) + 1
+
+    all_strategies = db.query(MaintenanceStrategy).all()
+    # Map equipment_class -> list of strategies that apply to standby
+    class_standby_strategies: dict[str, list[MaintenanceStrategy]] = {}
+    for s in all_strategies:
+        if s.applies_to_standby:
+            class_standby_strategies.setdefault(s.equipment_class, []).append(s)
+
+    YEARS_SPAN = 5.0
+
+    # Process duty/standby pairs
+    seen_pairs: set = set()
+    pairs_data = []
+    eq_duty_rates: dict[str, list[float]] = {}
+    eq_standby_rates: dict[str, list[float]] = {}
+
+    for duty in all_assets:
+        if duty.operating_status != "Duty" or not duty.paired_tag:
+            continue
+        pair_key = tuple(sorted([duty.tag, duty.paired_tag]))
+        if pair_key in seen_pairs:
+            continue
+        seen_pairs.add(pair_key)
+
+        standby = asset_map.get(duty.paired_tag)
+        if not standby:
+            continue
+
+        eq = duty.equipment_class
+        duty_failures = asset_corrective.get(duty.tag, 0)
+        standby_failures = asset_corrective.get(standby.tag, 0)
+        duty_rate = duty_failures / YEARS_SPAN
+        standby_rate = standby_failures / YEARS_SPAN
+
+        eq_duty_rates.setdefault(eq, []).append(duty_rate)
+        eq_standby_rates.setdefault(eq, []).append(standby_rate)
+
+        rate_ratio = round(duty_rate / standby_rate, 1) if standby_rate > 0 else None
+        condition_tasks = [
+            s for s in class_standby_strategies.get(eq, [])
+            if s.basis in ("time-based", "condition-based")
+        ]
+
+        pairs_data.append({
+            "duty_tag": duty.tag,
+            "standby_tag": standby.tag,
+            "equipment_class": eq,
+            "criticality": duty.criticality,
+            "duty_failures": duty_failures,
+            "standby_failures": standby_failures,
+            "duty_failure_rate": round(duty_rate, 3),
+            "standby_failure_rate": round(standby_rate, 3),
+            "rate_ratio": rate_ratio,
+            "shared_interval_tasks": len(condition_tasks),
+        })
+
+    # Failure rate comparison by equipment class
+    eq_comparison = []
+    for eq in eq_duty_rates:
+        avg_duty = float(np.mean(eq_duty_rates[eq]))
+        avg_standby = float(np.mean(eq_standby_rates.get(eq, [0.0])))
+        ratio = round(avg_duty / avg_standby, 2) if avg_standby > 0 else None
+        condition_tasks = [
+            s for s in class_standby_strategies.get(eq, [])
+            if s.basis in ("time-based", "condition-based")
+        ]
+        eq_comparison.append({
+            "equipment_class": eq,
+            "pair_count": len(eq_duty_rates[eq]),
+            "avg_duty_failure_rate": round(avg_duty, 3),
+            "avg_standby_failure_rate": round(avg_standby, 3),
+            "rate_ratio": ratio,
+            "condition_tasks": [
+                {"task_code": s.task_code, "task_description": s.task_description,
+                 "interval_days": s.interval_days, "proposed_standby_interval": s.interval_days * 2}
+                for s in condition_tasks
+            ],
+            "extension_opportunity": ratio is not None and ratio >= 1.5 and len(condition_tasks) > 0,
+        })
+
+    eq_comparison.sort(key=lambda x: x["rate_ratio"] or 0, reverse=True)
+
+    # Summary stats
+    total_pairs = len(pairs_data)
+    pairs_higher_duty = sum(1 for p in pairs_data if p["duty_failure_rate"] > p["standby_failure_rate"])
+    pct_higher = round(pairs_higher_duty / total_pairs * 100, 1) if total_pairs > 0 else 0
+
+    all_duty = [p["duty_failure_rate"] for p in pairs_data]
+    all_standby = [p["standby_failure_rate"] for p in pairs_data]
+    avg_duty_fleet = round(float(np.mean(all_duty)), 3) if all_duty else 0
+    avg_standby_fleet = round(float(np.mean(all_standby)), 3) if all_standby else 0
+    fleet_ratio = round(avg_duty_fleet / avg_standby_fleet, 1) if avg_standby_fleet > 0 else None
+
+    candidates = [e for e in eq_comparison if e["extension_opportunity"]]
+
+    if pct_higher >= 60 and len(candidates) >= 2:
+        verdict = "supported"
+    elif pct_higher >= 40 or len(candidates) >= 1:
+        verdict = "partial"
+    else:
+        verdict = "not_supported"
+
+    return {
+        "hypothesis": "H1.4",
+        "title": "Maintenance strategies do not account for equipment redundancy",
+        "verdict": verdict,
+        "summary": (
+            f"{total_pairs} duty/standby pairs analysed across the fleet. "
+            f"{pairs_higher_duty} ({pct_higher}%) show higher corrective failure rates on duty units than standby, "
+            f"confirming different operational stress profiles (fleet duty/standby ratio: {fleet_ratio}×). "
+            f"Despite this, all {total_pairs} pairs share identical PM intervals. "
+            f"{len(candidates)} equipment classes are candidates for standby interval extension."
+        ),
+        "total_pairs": total_pairs,
+        "pairs_with_higher_duty_rate": pairs_higher_duty,
+        "pct_with_higher_duty_rate": pct_higher,
+        "avg_duty_failure_rate": avg_duty_fleet,
+        "avg_standby_failure_rate": avg_standby_fleet,
+        "fleet_rate_ratio": fleet_ratio,
+        "failure_rate_by_class": eq_comparison,
+        "extension_candidates": candidates,
+        "pairs": sorted(
+            pairs_data,
+            key=lambda x: (x["duty_failure_rate"] - x["standby_failure_rate"]),
+            reverse=True
+        )[:25],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Weibull Analysis
+# ---------------------------------------------------------------------------
+
+# OREDA reference β values (used when empirical data is insufficient)
+OREDA_BETA = {
+    "Centrifugal Pump":       {"beta": 1.5, "source": "OREDA-2015 Table 2.8"},
+    "Reciprocating Pump":     {"beta": 1.5, "source": "OREDA-2015 Table 2.9"},
+    "Centrifugal Compressor": {"beta": 1.4, "source": "OREDA-2015 Table 3.2"},
+    "Gas Turbine Generator":  {"beta": 1.8, "source": "OREDA-2015 Table 4.1"},
+    "Diesel Generator":       {"beta": 1.6, "source": "OREDA-2015 Table 4.3"},
+    "Air Compressor":         {"beta": 1.3, "source": "OREDA-2015 Table 3.5"},
+    "Heat Exchanger":         {"beta": 1.2, "source": "OREDA-2015 Table 6.1"},
+    "Pressure Vessel":        {"beta": 0.9, "source": "OREDA-2015 Table 7.1"},
+    "Safety Valve":           {"beta": 0.8, "source": "OREDA-2015 Table 8.2"},
+    "Control Valve":          {"beta": 1.1, "source": "OREDA-2015 Table 8.4"},
+    "Fire & Gas Detector":    {"beta": 0.7, "source": "OREDA-2015 Table 9.1"},
+    "Electric Motor":         {"beta": 1.4, "source": "OREDA-2015 Table 5.2"},
+    "Switchgear":             {"beta": 1.0, "source": "OREDA-2015 Table 5.5"},
+    "UPS":                    {"beta": 0.9, "source": "OREDA-2015 Table 5.7"},
+    "Fan / Blower":           {"beta": 1.2, "source": "OREDA-2015 Table 3.8"},
+    "Pressure Transmitter":   {"beta": 1.1, "source": "OREDA-2015 Table 9.3"},
+    "Flow Meter":             {"beta": 1.0, "source": "OREDA-2015 Table 9.5"},
+}
+
+
+def _classify_beta(beta: float) -> dict:
+    if beta < 0.9:
+        return {
+            "label": "Infant Mortality",
+            "color": "#f59e0b",
+            "implication": "Early-life failures dominate. Time-based PM has limited value. Investigate installation quality, commissioning procedures, and infant mortality burn-in.",
+        }
+    elif beta <= 1.1:
+        return {
+            "label": "Random Failure",
+            "color": "#3b82f6",
+            "implication": "Failures are random — unrelated to age or operating time. Time-based PM cannot prevent these. Condition-based monitoring or run-to-failure may be more cost-effective.",
+        }
+    elif beta <= 1.5:
+        return {
+            "label": "Mild Wear-Out",
+            "color": "#10b981",
+            "implication": "Moderate age-related degradation. Time-based PM is partially effective. Align PM intervals closer to the characteristic life η to optimise coverage.",
+        }
+    else:
+        return {
+            "label": "Wear-Out",
+            "color": "#8b5cf6",
+            "implication": "Strong age-related wear-out. Time-based PM is highly effective. PM interval should be set at a fraction of η to prevent failures before they occur.",
+        }
+
+
+def _fit_weibull_mrr(inter_failure_days: list[float]) -> tuple[float | None, float | None]:
+    """Median rank regression Weibull fit. Returns (β, η) or (None, None) if insufficient data."""
+    t = sorted(d for d in inter_failure_days if d > 0)
+    n = len(t)
+    if n < 5:
+        return None, None
+    F = [(i + 1 - 0.3) / (n + 0.4) for i in range(n)]
+    x = np.log(t)
+    y = np.log(np.log(1.0 / (1.0 - np.array(F))))
+    try:
+        slope, intercept = np.polyfit(x, y, 1)
+        beta = max(0.1, float(slope))
+        eta = float(np.exp(-intercept / beta))
+        return round(beta, 2), round(eta, 0)
+    except Exception:
+        return None, None
+
+
+def get_weibull_analysis(db: Session, platforms: list[str] | None = None) -> dict:
+    """
+    Weibull β estimation per equipment class from inter-failure times (corrective WOs).
+    Falls back to OREDA reference values where empirical data is insufficient.
+    """
+    tag_set = _asset_tags(db, platforms)
+
+    corrective_wos = _filter_wos(
+        db.query(WorkOrder).filter(
+            WorkOrder.wo_type == "Corrective",
+            WorkOrder.scheduled_date.isnot(None),
+        ),
+        tag_set,
+    ).all()
+
+    # Build per-asset failure date lists
+    asset_failures: dict[str, list] = {}
+    for wo in corrective_wos:
+        asset_failures.setdefault(wo.asset_tag, []).append(wo.scheduled_date)
+
+    # Map assets to equipment class
+    all_assets = _filter_assets(db.query(Asset), tag_set).all()
+    asset_class: dict[str, str] = {a.tag: a.equipment_class for a in all_assets}
+
+    # Collect inter-failure intervals per class
+    class_intervals: dict[str, list[float]] = {}
+    class_failure_count: dict[str, int] = {}
+    for tag, dates in asset_failures.items():
+        cls = asset_class.get(tag)
+        if not cls:
+            continue
+        sorted_dates = sorted(dates)
+        class_failure_count[cls] = class_failure_count.get(cls, 0) + len(sorted_dates)
+        if len(sorted_dates) >= 2:
+            for i in range(len(sorted_dates) - 1):
+                gap = (sorted_dates[i + 1] - sorted_dates[i]).days
+                if gap > 0:
+                    class_intervals.setdefault(cls, []).append(float(gap))
+
+    # All equipment classes present in the filtered asset set
+    all_classes = sorted(set(asset_class.values()))
+
+    results = []
+    for cls in all_classes:
+        intervals = class_intervals.get(cls, [])
+        n_failures = class_failure_count.get(cls, 0)
+
+        beta_emp, eta_emp = _fit_weibull_mrr(intervals)
+        oreda = OREDA_BETA.get(cls)
+
+        if beta_emp is not None:
+            beta = beta_emp
+            eta = eta_emp
+            data_source = "empirical"
+            n_intervals = len(intervals)
+        elif oreda:
+            beta = oreda["beta"]
+            eta = None
+            data_source = "oreda_reference"
+            n_intervals = len(intervals)
+        else:
+            continue
+
+        classification = _classify_beta(beta)
+
+        results.append({
+            "equipment_class": cls,
+            "beta": beta,
+            "eta_days": eta,
+            "n_failures": n_failures,
+            "n_intervals_used": n_intervals,
+            "data_source": data_source,
+            "oreda_reference": oreda["source"] if oreda else None,
+            "classification": classification["label"],
+            "classification_color": classification["color"],
+            "maintenance_implication": classification["implication"],
+        })
+
+    results.sort(key=lambda x: x["beta"], reverse=True)
+
+    wear_out = [r for r in results if r["beta"] > 1.1]
+    random_f = [r for r in results if 0.9 <= r["beta"] <= 1.1]
+    infant = [r for r in results if r["beta"] < 0.9]
+
+    return {
+        "classes_analysed": len(results),
+        "wear_out_count": len(wear_out),
+        "random_failure_count": len(random_f),
+        "infant_mortality_count": len(infant),
+        "avg_fleet_beta": round(float(np.mean([r["beta"] for r in results])), 2) if results else None,
+        "results": results,
+        "summary": (
+            f"{len(results)} equipment classes analysed. "
+            f"{len(wear_out)} show wear-out behaviour (β>1.1) — time-based PM is appropriate. "
+            f"{len(random_f)} exhibit random failure patterns (β≈1) — condition-based or run-to-failure strategies warrant consideration. "
+            f"{len(infant)} show infant mortality (β<0.9) — commissioning and installation quality should be reviewed."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# SCE / Statutory Inspection Register
+# ---------------------------------------------------------------------------
+
+SCE_TASK_REGISTRY = {
+    "FG-I01": {
+        "description": "F&G Detector — Functional Test",
+        "regulation": "PFEER / IEC 61511",
+        "sce_type": "Fire & Gas Detection",
+        "interval_days": 180,
+        "notes": "Mandatory proof test for SIL-rated F&G detectors under IEC 61511. Minimum 6-monthly for SIL 1–2 applications.",
+    },
+    "FG-I02": {
+        "description": "F&G Detector — Calibration",
+        "regulation": "PFEER / Manufacturer",
+        "sce_type": "Fire & Gas Detection",
+        "interval_days": 365,
+        "notes": "Annual calibration mandated by PFEER and manufacturer guidance.",
+    },
+    "FG-I03": {
+        "description": "F&G Detector — Head Replacement",
+        "regulation": "PFEER / Manufacturer",
+        "sce_type": "Fire & Gas Detection",
+        "interval_days": 1825,
+        "notes": "5-yearly detector head replacement per manufacturer life-limiting specification.",
+    },
+    "SV-S01": {
+        "description": "Safety Valve — Functional Test & Overhaul",
+        "regulation": "PSSR 2000 / Written Scheme of Examination",
+        "sce_type": "Overpressure Protection",
+        "interval_days": 365,
+        "notes": "PSSR 2000 mandates testing and overhaul per Written Scheme of Examination. Interval set to annual for critical overpressure protection duties.",
+    },
+    "SV-S02": {
+        "description": "Safety Valve — Visual Inspection",
+        "regulation": "PSSR 2000 / WSE",
+        "sce_type": "Overpressure Protection",
+        "interval_days": 730,
+        "notes": "Biennial external visual inspection per PSSR Written Scheme of Examination.",
+    },
+    "PV-S01": {
+        "description": "Pressure Vessel — External Visual",
+        "regulation": "PSSR 2000 / WSE",
+        "sce_type": "Pressure Containment",
+        "interval_days": 730,
+        "notes": "Statutory 2-yearly external visual inspection per PSSR Written Scheme of Examination.",
+    },
+    "PV-S02": {
+        "description": "Pressure Vessel — Internal Inspection",
+        "regulation": "PSSR 2000 / WSE",
+        "sce_type": "Pressure Containment",
+        "interval_days": 1825,
+        "notes": "5-yearly internal inspection per PSSR Written Scheme of Examination.",
+    },
+    "PV-S03": {
+        "description": "Pressure Vessel — Pressure Test",
+        "regulation": "PSSR 2000 / WSE",
+        "sce_type": "Pressure Containment",
+        "interval_days": 3650,
+        "notes": "10-yearly pressure test per PSSR Written Scheme of Examination.",
+    },
+    "CV-I01": {
+        "description": "Control Valve — Partial Stroke Test",
+        "regulation": "IEC 61511 / SIL Assessment",
+        "sce_type": "Emergency Shutdown",
+        "interval_days": 180,
+        "notes": "6-monthly partial stroke test required to maintain PFD targets for SIL 1–2 ESD valves.",
+    },
+    "CV-I02": {
+        "description": "Control Valve — Full Stroke Test",
+        "regulation": "IEC 61511 / SIL Assessment",
+        "sce_type": "Emergency Shutdown",
+        "interval_days": 365,
+        "notes": "Annual full-stroke proof test mandated by IEC 61511 SIL assessment for ESD duty valves.",
+    },
+}
+
+SCE_EQUIPMENT_CLASSES = {
+    "Fire & Gas Detector",
+    "Safety Valve",
+    "Pressure Vessel",
+    "Control Valve",  # where SIL-rated ESD duty
+}
+
+
+def get_sce_analysis(db: Session, platforms: list[str] | None = None) -> dict:
+    """
+    Safety Critical Element (SCE) register and statutory inspection summary.
+    SCEs are excluded from all maintenance optimisation scope.
+    """
+    tag_set = _asset_tags(db, platforms)
+
+    # Identify SCE assets: equipment class is safety-critical OR criticality = 1
+    sce_assets_q = _filter_assets(db.query(Asset), tag_set).filter(
+        (Asset.equipment_class.in_(SCE_EQUIPMENT_CLASSES)) | (Asset.criticality == "1")
+    )
+    sce_assets = sce_assets_q.all()
+
+    sce_asset_list = [
+        {
+            "tag": a.tag,
+            "description": a.description,
+            "equipment_class": a.equipment_class,
+            "criticality": a.criticality,
+            "platform": a.platform,
+            "operating_status": a.operating_status,
+            "system": a.system,
+            "sce_reason": (
+                "SCE Equipment Class" if a.equipment_class in SCE_EQUIPMENT_CLASSES else "Criticality 1 Asset"
+            ),
+            "regulation_basis": next(
+                (v["regulation"] for k, v in SCE_TASK_REGISTRY.items()
+                 if v["sce_type"] in (
+                     "Fire & Gas Detection" if a.equipment_class == "Fire & Gas Detector" else
+                     "Overpressure Protection" if a.equipment_class == "Safety Valve" else
+                     "Pressure Containment" if a.equipment_class == "Pressure Vessel" else
+                     "Emergency Shutdown" if a.equipment_class == "Control Valve" else ""
+                 )),
+                "Criticality Assessment" if a.criticality == "1" else "N/A"
+            ),
+        }
+        for a in sce_assets
+    ]
+
+    sce_tags = {a.tag for a in sce_assets}
+
+    # Statutory work orders on SCE assets
+    statutory_wos = _filter_wos(
+        db.query(WorkOrder).filter(WorkOrder.wo_type == "Statutory"),
+        tag_set,
+    ).all()
+
+    statutory_on_sce = [w for w in statutory_wos if w.asset_tag in sce_tags]
+    all_statutory_cost = sum(w.actual_cost or 0 for w in statutory_wos)
+    sce_statutory_cost = sum(w.actual_cost or 0 for w in statutory_on_sce)
+
+    # All WOs on SCE assets
+    all_wos_on_sce = _filter_wos(db.query(WorkOrder), {t for t in sce_tags}).all() if sce_tags else []
+    total_sce_cost = sum(w.actual_cost or 0 for w in all_wos_on_sce)
+    all_wos_all = _filter_wos(db.query(WorkOrder), tag_set).all()
+    total_all_cost = sum(w.actual_cost or 0 for w in all_wos_all)
+
+    # Statutory inspection schedule summary
+    task_summary: dict[str, dict] = {}
+    for wo in statutory_wos:
+        tc = wo.task_code or "UNKNOWN"
+        task_summary.setdefault(tc, {
+            "task_code": tc,
+            "task_description": wo.task_description,
+            "wo_count": 0,
+            "total_cost": 0.0,
+            "total_hours": 0.0,
+        })
+        task_summary[tc]["wo_count"] += 1
+        task_summary[tc]["total_cost"] += wo.actual_cost or 0
+        task_summary[tc]["total_hours"] += wo.actual_hours or 0
+
+    inspection_schedule = []
+    for tc, info in task_summary.items():
+        registry = SCE_TASK_REGISTRY.get(tc, {})
+        inspection_schedule.append({
+            "task_code": tc,
+            "task_description": info["task_description"],
+            "regulation": registry.get("regulation", "Industry Best Practice"),
+            "sce_type": registry.get("sce_type", "General"),
+            "interval_days": registry.get("interval_days"),
+            "wo_count": info["wo_count"],
+            "total_cost": round(info["total_cost"], 2),
+            "avg_hours": round(info["total_hours"] / max(info["wo_count"], 1), 1),
+            "notes": registry.get("notes", ""),
+        })
+
+    inspection_schedule.sort(key=lambda x: x["wo_count"], reverse=True)
+
+    # By class breakdown
+    by_class: dict[str, int] = {}
+    for a in sce_assets:
+        by_class[a.equipment_class] = by_class.get(a.equipment_class, 0) + 1
+
+    return {
+        "total_sce_assets": len(sce_assets),
+        "total_statutory_wos": len(statutory_wos),
+        "statutory_wos_on_sce": len(statutory_on_sce),
+        "total_statutory_cost": round(all_statutory_cost, 2),
+        "total_sce_cost": round(total_sce_cost, 2),
+        "sce_cost_pct_of_total": round(total_sce_cost / total_all_cost * 100, 1) if total_all_cost > 0 else 0,
+        "sce_assets_by_class": by_class,
+        "sce_asset_list": sorted(sce_asset_list, key=lambda x: (x["equipment_class"], x["tag"])),
+        "statutory_inspection_schedule": inspection_schedule,
+        "scope_note": (
+            f"{len(sce_assets)} Safety Critical Elements identified across the fleet. "
+            f"These assets and their statutory inspection tasks are excluded from all maintenance optimisation scope. "
+            f"Statutory inspections are mandated by PSSR 2000, PFEER, IEC 61511, and Written Schemes of Examination — "
+            f"they cannot be deferred, extended, or rationalised without regulatory approval."
+        ),
+    }
