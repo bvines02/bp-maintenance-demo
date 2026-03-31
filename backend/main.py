@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 import pandas as pd
 import io
 import os
-import threading
 from datetime import datetime
 
 # Load .env before any other imports that read env vars
@@ -52,8 +51,8 @@ def startup():
     finally:
         db.close()
 
-    # Warm analysis cache in background so first user hit is instant
-    threading.Thread(target=_warm_cache, daemon=True).start()
+    # Warm analysis cache synchronously so every request after startup is instant
+    _warm_cache()
 
 
 def _warm_cache():

@@ -38,6 +38,14 @@ def get_duty_standby_opportunities(db: Session, platforms: list[str] | None = No
     tag_set = _asset_tags(db, platforms)
     q = db.query(Asset).filter(Asset.paired_tag.isnot(None))
     assets = _filter_assets(q, tag_set).all()
+
+    # Pre-load asset map and all PPM WOs — avoids N+1 per pair
+    asset_map_ds: dict[str, Asset] = {a.tag: a for a in assets}
+    ppm_wos = _filter_wos(db.query(WorkOrder).filter(WorkOrder.wo_type == "PPM"), tag_set).all()
+    ppm_by_tag: dict[str, list] = {}
+    for w in ppm_wos:
+        ppm_by_tag.setdefault(w.asset_tag, []).append(w)
+
     seen_pairs = set()
     opportunities = []
 
@@ -49,19 +57,12 @@ def get_duty_standby_opportunities(db: Session, platforms: list[str] | None = No
             continue
         seen_pairs.add(pair_key)
 
-        standby = db.query(Asset).filter(Asset.tag == asset.paired_tag).first()
+        standby = asset_map_ds.get(asset.paired_tag)
         if not standby:
             continue
 
-        # Get all tasks for both assets
-        duty_tasks = db.query(WorkOrder).filter(
-            WorkOrder.asset_tag == asset.tag,
-            WorkOrder.wo_type == "PPM"
-        ).all()
-        standby_tasks = db.query(WorkOrder).filter(
-            WorkOrder.asset_tag == standby.tag,
-            WorkOrder.wo_type == "PPM"
-        ).all()
+        duty_tasks = ppm_by_tag.get(asset.tag, [])
+        standby_tasks = ppm_by_tag.get(standby.tag, [])
 
         duty_codes = set(w.task_code for w in duty_tasks)
         standby_codes = set(w.task_code for w in standby_tasks)
@@ -116,6 +117,22 @@ def get_deferral_opportunities(db: Session, min_occurrences: int = 4, min_avg_de
     if not wos:
         return []
 
+    # Pre-load assets, strategies and corrective failure counts — avoids N+1 queries
+    all_assets_d = _filter_assets(db.query(Asset), tag_set).all()
+    asset_map_d: dict[str, Asset] = {a.tag: a for a in all_assets_d}
+
+    all_strategies_d = db.query(MaintenanceStrategy).all()
+    strategy_map_d: dict[str, MaintenanceStrategy] = {s.task_code: s for s in all_strategies_d}
+
+    # Corrective failure counts per asset tag
+    corr_wos = _filter_wos(db.query(WorkOrder).filter(
+        WorkOrder.wo_type == "Corrective",
+        WorkOrder.failure_mode.isnot(None),
+    ), tag_set).all()
+    failures_by_tag: dict[str, int] = {}
+    for cw in corr_wos:
+        failures_by_tag[cw.asset_tag] = failures_by_tag.get(cw.asset_tag, 0) + 1
+
     # Group by asset + task_code
     data = {}
     for wo in wos:
@@ -132,17 +149,9 @@ def get_deferral_opportunities(db: Session, min_occurrences: int = 4, min_avg_de
         if avg_deferral < min_avg_deferral:
             continue
 
-        # Confirm no failures on this asset during deferral periods
-        failures = db.query(WorkOrder).filter(
-            WorkOrder.asset_tag == asset_tag,
-            WorkOrder.wo_type == "Corrective",
-            WorkOrder.failure_mode.isnot(None),
-        ).count()
-
-        asset = db.query(Asset).filter(Asset.tag == asset_tag).first()
-        strategy = db.query(MaintenanceStrategy).filter(
-            MaintenanceStrategy.task_code == task_code
-        ).first()
+        asset = asset_map_d.get(asset_tag)
+        strategy = strategy_map_d.get(task_code)
+        failures = failures_by_tag.get(asset_tag, 0)
 
         if not asset or not strategy:
             continue
