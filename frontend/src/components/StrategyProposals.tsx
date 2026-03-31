@@ -34,14 +34,18 @@ interface JustificationItem {
   strength: "strong" | "moderate" | "supporting";
 }
 
+type ProposalType = "extend_interval" | "increase_frequency" | "strategy_change" | "regulatory_optimisation";
+
 interface Proposal {
   id: string;
+  proposal_type: ProposalType;
+  change_description: string;
   equipment_class: string;
   task_code: string;
   task_description: string;
   discipline: string;
   current_interval_days: number;
-  proposed_interval_days: number;
+  proposed_interval_days: number | null;
   affected_assets: number;
   dominant_criticality: string;
   deferral_evidence: { occurrences: number; avg_deferral_days: number; max_deferral_days: number };
@@ -76,6 +80,13 @@ const MOC_COLOR: Record<string, string> = {
   ready: "#10b981",
   review: "#f59e0b",
   insufficient: "#64748b",
+};
+
+const PROPOSAL_TYPE_CONFIG: Record<ProposalType, { label: string; color: string }> = {
+  extend_interval:         { label: "Extend Interval",      color: "#10b981" },
+  increase_frequency:      { label: "Increase Frequency",   color: "#ef4444" },
+  strategy_change:         { label: "Strategy Change",      color: "#8b5cf6" },
+  regulatory_optimisation: { label: "Regulatory Alignment", color: "#3b82f6" },
 };
 
 // ── Risk Matrix ────────────────────────────────────────────────────────────────
@@ -238,7 +249,13 @@ function MocBadge({ readiness, label }: { readiness: string; label: string }) {
 
 function ProposalCard({ proposal, selected, onClick }: { proposal: Proposal; selected: boolean; onClick: () => void }) {
   const r = proposal.risk;
-  const intervalChange = Math.round(((proposal.proposed_interval_days - proposal.current_interval_days) / proposal.current_interval_days) * 100);
+  const typeConfig = PROPOSAL_TYPE_CONFIG[proposal.proposal_type ?? "extend_interval"];
+  const hasInterval = proposal.proposed_interval_days != null;
+  const intervalChange = hasInterval
+    ? Math.round(((proposal.proposed_interval_days! - proposal.current_interval_days) / proposal.current_interval_days) * 100)
+    : null;
+  const isIncrease = proposal.proposal_type === "increase_frequency";
+  const intervalColor = isIncrease ? "#ef4444" : "#10b981";
 
   return (
     <div
@@ -247,6 +264,7 @@ function ProposalCard({ proposal, selected, onClick }: { proposal: Proposal; sel
         padding: "12px 14px",
         background: selected ? "#1e293b" : "var(--surface)",
         border: `1px solid ${selected ? "#3b82f6" : "var(--border)"}`,
+        borderLeft: `3px solid ${typeConfig.color}`,
         borderRadius: 6,
         cursor: "pointer",
         transition: "all 0.15s",
@@ -254,20 +272,36 @@ function ProposalCard({ proposal, selected, onClick }: { proposal: Proposal; sel
     >
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{proposal.equipment_class}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+            <span style={{
+              padding: "1px 6px", borderRadius: 3, fontSize: 10, fontWeight: 700,
+              background: typeConfig.color + "22", color: typeConfig.color,
+              border: `1px solid ${typeConfig.color}44`,
+            }}>{typeConfig.label}</span>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{proposal.equipment_class}</span>
+          </div>
           <div style={{ fontSize: 11, color: "var(--muted)" }}>{proposal.task_description}</div>
         </div>
         <MocBadge readiness={proposal.moc_readiness} label={proposal.moc_label} />
       </div>
 
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 8 }}>
-        <div style={{ fontSize: 11 }}>
-          <span style={{ color: "var(--muted)" }}>Interval: </span>
-          <span style={{ fontWeight: 600 }}>{proposal.current_interval_days}d</span>
-          <span style={{ color: "var(--muted)" }}> → </span>
-          <span style={{ fontWeight: 600, color: "#10b981" }}>{proposal.proposed_interval_days}d</span>
-          <span style={{ color: "#10b981", fontSize: 10, marginLeft: 4 }}>+{intervalChange}%</span>
-        </div>
+        {proposal.proposal_type === "strategy_change" ? (
+          <div style={{ fontSize: 11 }}>
+            <span style={{ color: "var(--muted)" }}>Change: </span>
+            <span style={{ fontWeight: 600, color: "#8b5cf6" }}>Time-based → Condition-based</span>
+          </div>
+        ) : hasInterval && intervalChange !== null ? (
+          <div style={{ fontSize: 11 }}>
+            <span style={{ color: "var(--muted)" }}>{isIncrease ? "Tighten: " : "Interval: "}</span>
+            <span style={{ fontWeight: 600 }}>{proposal.current_interval_days}d</span>
+            <span style={{ color: "var(--muted)" }}> → </span>
+            <span style={{ fontWeight: 600, color: intervalColor }}>{proposal.proposed_interval_days}d</span>
+            <span style={{ color: intervalColor, fontSize: 10, marginLeft: 4 }}>
+              {intervalChange > 0 ? "+" : ""}{intervalChange}%
+            </span>
+          </div>
+        ) : null}
         <div style={{ fontSize: 11 }}>
           <span style={{ color: "var(--muted)" }}>Risk: </span>
           <span style={{ fontWeight: 600, color: BAND_COLOR[r.current_band] }}>{r.current_band}</span>
@@ -283,8 +317,12 @@ function ProposalCard({ proposal, selected, onClick }: { proposal: Proposal; sel
           <span style={{ fontWeight: 600 }}>{proposal.affected_assets}</span>
         </div>
         <div style={{ fontSize: 11 }}>
-          <span style={{ color: "var(--muted)" }}>Hours saved/yr: </span>
-          <span style={{ fontWeight: 600, color: "#3b82f6" }}>{proposal.total_hours_saved_per_year}</span>
+          <span style={{ color: "var(--muted)" }}>
+            {proposal.total_hours_saved_per_year < 0 ? "Additional hrs/yr: " : "Hours saved/yr: "}
+          </span>
+          <span style={{ fontWeight: 600, color: proposal.total_hours_saved_per_year < 0 ? "#ef4444" : "#3b82f6" }}>
+            {proposal.total_hours_saved_per_year < 0 ? "+" : ""}{Math.abs(proposal.total_hours_saved_per_year)}
+          </span>
         </div>
       </div>
       <div style={{ display: "flex", gap: 4, marginTop: 8, flexWrap: "wrap" }}>
@@ -317,25 +355,52 @@ function DetailPanel({ proposal }: { proposal: Proposal }) {
         </div>
       </div>
 
-      {/* Interval change */}
+      {/* Change summary */}
       <div style={{
         background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 16,
-        display: "flex", gap: 32, alignItems: "center",
+        display: "flex", gap: 32, alignItems: "center", flexWrap: "wrap",
       }}>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Current Interval</div>
-          <div style={{ fontSize: 28, fontWeight: 700 }}>{proposal.current_interval_days}</div>
-          <div style={{ fontSize: 11, color: "var(--muted)" }}>days</div>
-        </div>
-        <div style={{ fontSize: 20, color: "#10b981" }}>→</div>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Proposed Interval</div>
-          <div style={{ fontSize: 28, fontWeight: 700, color: "#10b981" }}>{proposal.proposed_interval_days}</div>
-          <div style={{ fontSize: 11, color: "var(--muted)" }}>days</div>
-        </div>
+        {proposal.proposal_type === "strategy_change" ? (
+          <>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Current Strategy</div>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>Time-based</div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>{proposal.current_interval_days}d interval</div>
+            </div>
+            <div style={{ fontSize: 20, color: "#8b5cf6" }}>→</div>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Proposed Strategy</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#8b5cf6" }}>Condition-based</div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>replace on condition</div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Current Interval</div>
+              <div style={{ fontSize: 28, fontWeight: 700 }}>{proposal.current_interval_days}</div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>days</div>
+            </div>
+            <div style={{ fontSize: 20, color: proposal.proposal_type === "increase_frequency" ? "#ef4444" : "#10b981" }}>→</div>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Proposed Interval</div>
+              <div style={{ fontSize: 28, fontWeight: 700, color: proposal.proposal_type === "increase_frequency" ? "#ef4444" : "#10b981" }}>
+                {proposal.proposed_interval_days}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>days</div>
+            </div>
+          </>
+        )}
         <div style={{ marginLeft: "auto", textAlign: "right" }}>
-          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Hours Saved / Year</div>
-          <div style={{ fontSize: 24, fontWeight: 700, color: "#3b82f6" }}>{proposal.total_hours_saved_per_year}</div>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>
+            {proposal.total_hours_saved_per_year < 0 ? "Additional Hours / Year" : "Hours Saved / Year"}
+          </div>
+          <div style={{
+            fontSize: 24, fontWeight: 700,
+            color: proposal.total_hours_saved_per_year < 0 ? "#ef4444" : "#3b82f6",
+          }}>
+            {proposal.total_hours_saved_per_year < 0 ? "+" : ""}{Math.abs(proposal.total_hours_saved_per_year)}
+          </div>
           <div style={{ fontSize: 11, color: "var(--muted)" }}>across {proposal.affected_assets} assets</div>
         </div>
       </div>
@@ -483,6 +548,7 @@ export default function StrategyProposals() {
   const { platformsParam: selectedString } = usePlatforms();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "ready" | "review" | "insufficient">("all");
+  const [typeFilter, setTypeFilter] = useState<ProposalType | "all">("all");
 
   const { data, isLoading } = useQuery<ProposalsData>({
     queryKey: ["strategy-proposals", selectedString],
@@ -509,7 +575,8 @@ export default function StrategyProposals() {
     return <div style={{ color: "var(--muted)", padding: 40, textAlign: "center" }}>No proposals generated.</div>;
   }
 
-  const filtered = filter === "all" ? data.proposals : data.proposals.filter(p => p.moc_readiness === filter);
+  const byMoc = filter === "all" ? data.proposals : data.proposals.filter(p => p.moc_readiness === filter);
+  const filtered = typeFilter === "all" ? byMoc : byMoc.filter(p => (p.proposal_type ?? "extend_interval") === typeFilter);
   const selected = data.proposals.find(p => p.id === selectedId) ?? data.proposals[0];
 
   return (
@@ -536,7 +603,26 @@ export default function StrategyProposals() {
         {data.ready_for_moc} proposals ready for MoC submission · {data.total_hours_saved_per_year} engineering hours recoverable per year · each proposal justified across multiple evidence strands (deferral patterns, MTBF vs interval, CM:PPM ratio, redundancy analysis)
       </InsightBanner>
 
-      {/* Filter tabs */}
+      {/* Proposal type filter */}
+      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+        {(["all", "extend_interval", "increase_frequency", "strategy_change", "regulatory_optimisation"] as const).map(t => {
+          const cfg = t === "all" ? null : PROPOSAL_TYPE_CONFIG[t];
+          const count = t === "all" ? data.proposals.length : data.proposals.filter(p => (p.proposal_type ?? "extend_interval") === t).length;
+          return (
+            <button key={t} onClick={() => setTypeFilter(t)} style={{
+              padding: "4px 12px", borderRadius: 6, fontSize: 11,
+              background: typeFilter === t ? (cfg ? cfg.color + "22" : "#3b82f622") : "transparent",
+              color: typeFilter === t ? (cfg ? cfg.color : "#3b82f6") : "var(--muted)",
+              border: typeFilter === t ? `1px solid ${cfg ? cfg.color + "44" : "#3b82f644"}` : "1px solid transparent",
+              cursor: "pointer", fontWeight: typeFilter === t ? 600 : 400,
+            }}>
+              {t === "all" ? "All types" : cfg!.label} ({count})
+            </button>
+          );
+        })}
+      </div>
+
+      {/* MoC readiness filter */}
       <div style={{ display: "flex", gap: 4 }}>
         {(["all", "ready", "review", "insufficient"] as const).map(f => (
           <button

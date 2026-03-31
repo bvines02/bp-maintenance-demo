@@ -1239,6 +1239,22 @@ def get_strategy_proposals(db: Session, platforms: list[str] | None = None) -> d
                 if gap > 0:
                     intervals.append(float(gap))
         class_mtbf[cls] = float(np.mean(intervals)) if len(intervals) >= 5 else None
+        # Also compute CV for H2.2 (coefficient of variation — distinguishes random from wear-out)
+
+    class_cv: dict[str, float | None] = {}
+    for cls, tags in eq_class_tags.items():
+        ivs: list[float] = []
+        for tag in tags:
+            dates = sorted(asset_failure_dates.get(tag, []))
+            for i in range(len(dates) - 1):
+                gap = (dates[i + 1] - dates[i]).days
+                if gap > 0:
+                    ivs.append(float(gap))
+        if len(ivs) >= 3:
+            m = float(np.mean(ivs))
+            class_cv[cls] = round(float(np.std(ivs)) / m, 2) if m > 0 else None
+        else:
+            class_cv[cls] = None
 
     # H1.3: Per-class PPM count for CM:PPM ratio
     all_ppm_wos = _filter_wos(db.query(WorkOrder).filter(
@@ -1450,6 +1466,8 @@ def get_strategy_proposals(db: Session, platforms: list[str] | None = None) -> d
 
         proposals.append({
             "id": f"{eq_class[:3].upper()}-{task_code}",
+            "proposal_type": "extend_interval",
+            "change_description": f"Extend PM interval from {current_interval}d to {proposed_interval}d based on deferral evidence",
             "equipment_class": eq_class,
             "task_code": task_code,
             "task_description": strategy.task_description,
@@ -1584,6 +1602,8 @@ def get_strategy_proposals(db: Session, platforms: list[str] | None = None) -> d
 
             proposals.append({
                 "id": f"H21-{cls[:3].upper()}-{strategy.task_code}",
+                "proposal_type": "extend_interval",
+                "change_description": f"Extend PM interval from {strategy.interval_days}d to {proposed_interval}d — empirical MTBF is {ratio:.1f}× the current interval",
                 "equipment_class": cls,
                 "task_code": strategy.task_code,
                 "task_description": strategy.task_description,
@@ -1706,6 +1726,8 @@ def get_strategy_proposals(db: Session, platforms: list[str] | None = None) -> d
 
             proposals.append({
                 "id": prop_id,
+                "proposal_type": "extend_interval",
+                "change_description": f"Extend standby-only PM interval from {strategy.interval_days}d to {proposed_interval}d — duty units fail {avg_ratio:.1f}× more frequently",
                 "equipment_class": cls,
                 "task_code": strategy.task_code,
                 "task_description": f"[Standby] {strategy.task_description}",
@@ -1734,6 +1756,317 @@ def get_strategy_proposals(db: Session, platforms: list[str] | None = None) -> d
                 "justification": just,
             })
             covered_pairs_h14.add((cls, strategy.task_code))
+
+    # ── H1.3-driven proposals: increase PM frequency on high-CM critical classes ─
+    from collections import Counter as _Counter
+    all_covered = {(p["equipment_class"], p["task_code"]) for p in proposals}
+
+    for cls in eq_class_tags:
+        ppm_c = eq_class_ppm_count.get(cls, 0)
+        cm_c = eq_class_failures.get(cls, 0)
+        if ppm_c == 0:
+            continue
+        cm_pct = cm_c / ppm_c * 100
+        if cm_pct < 20:  # below threshold — PM is working
+            continue
+
+        # Only flag where critical (criticality 1 or 2) assets are involved
+        cls_assets = [asset_map[t] for t in eq_class_tags.get(cls, []) if t in asset_map]
+        critical_assets = [a for a in cls_assets if a.criticality in ("1", "2")]
+        if not critical_assets:
+            continue
+
+        # Target: the longest time-based interval — tightening this has most impact
+        cls_strats = [s for s in all_strategies
+                      if s.equipment_class == cls and s.basis in ("Time-based", "Condition-based")]
+        if not cls_strats:
+            continue
+        longest = max(cls_strats, key=lambda s: s.interval_days)
+        if (cls, longest.task_code) in all_covered:
+            continue
+
+        proposed_interval = max(30, int(longest.interval_days * 0.75))  # tighten by 25%
+
+        failure_rate = cm_c / (len(cls_assets) * YEARS_SPAN)
+        consequence = _consequence_score("1")
+        cur_l = _likelihood_score(failure_rate)
+        cur_score = cur_l * consequence
+        cur_band = _risk_band(cur_score)
+        prop_rate = failure_rate * 0.80  # tighter PM expected to catch failures earlier
+        prop_l = _likelihood_score(prop_rate)
+        prop_score = prop_l * consequence
+        prop_band = _risk_band(prop_score)
+        b_delta = _risk_band_rank(prop_band) - _risk_band_rank(cur_band)
+
+        alarp_s = "Risk reduced"
+        alarp_d = ("Increasing PM frequency reduces failure likelihood on critical assets. "
+                   "Intervention is always ALARP-justified where evidence indicates current strategy is insufficient.")
+        measures = COMPENSATING_MEASURES_MAP.get(cls, DEFAULT_MEASURES)
+        moc_r = "review"
+        moc_l = "Engineering review recommended"
+
+        # Additional hours required (negative saving = investment)
+        wpy_cur = 365.0 / longest.interval_days
+        wpy_prop = 365.0 / proposed_interval
+        additional_hrs = round((wpy_prop - wpy_cur) * longest.estimated_hours * len(cls_assets), 1)
+
+        just_h13 = [{
+            "hypothesis": "H1.3",
+            "type": "High Corrective Rate",
+            "finding": (
+                f"{cls} has a corrective:PPM ratio of {cm_pct:.1f}% "
+                f"({cm_c} corrective events vs {ppm_c} planned completions over 6 years) — "
+                f"above the 20% threshold indicating the current PM strategy is not preventing "
+                f"failures at an acceptable rate. {len(critical_assets)} of {len(cls_assets)} "
+                f"assets are criticality 1 or 2. Increasing PM frequency should intercept "
+                f"failures earlier in the degradation curve."
+            ),
+            "strength": "strong" if cm_pct > 30 else "moderate",
+        }]
+
+        proposals.append({
+            "id": f"H13-{cls[:3].upper()}-{longest.task_code}",
+            "proposal_type": "increase_frequency",
+            "change_description": f"Tighten PM interval from {longest.interval_days}d to {proposed_interval}d to address elevated corrective rate on critical assets",
+            "equipment_class": cls,
+            "task_code": longest.task_code,
+            "task_description": longest.task_description,
+            "discipline": longest.discipline,
+            "current_interval_days": longest.interval_days,
+            "proposed_interval_days": proposed_interval,
+            "affected_assets": len(cls_assets),
+            "dominant_criticality": "1",
+            "deferral_evidence": {"occurrences": 0, "avg_deferral_days": 0.0, "max_deferral_days": 0},
+            "failure_data": {"total_failures": cm_c, "assets_in_class": len(cls_assets), "failure_rate_per_year": round(failure_rate, 3)},
+            "risk": {
+                "current_likelihood": cur_l, "current_likelihood_label": LIKELIHOOD_LABELS[cur_l],
+                "current_consequence": consequence, "current_consequence_label": CONSEQUENCE_LABELS[consequence],
+                "current_score": cur_score, "current_band": cur_band,
+                "proposed_likelihood": prop_l, "proposed_likelihood_label": LIKELIHOOD_LABELS[prop_l],
+                "proposed_consequence": consequence, "proposed_consequence_label": CONSEQUENCE_LABELS[consequence],
+                "proposed_score": prop_score, "proposed_band": prop_band,
+                "risk_delta": prop_score - cur_score, "band_delta": b_delta,
+                "alarp_status": alarp_s, "alarp_description": alarp_d,
+                "compensating_measures": measures,
+            },
+            "moc_readiness": moc_r,
+            "moc_label": moc_l,
+            "total_hours_saved_per_year": -additional_hrs,  # negative = investment required
+            "evidence_hypotheses": ["H1.3"],
+            "justification": just_h13,
+        })
+        all_covered.add((cls, longest.task_code))
+
+    # ── H2.2-driven proposals: strategy type change for random-failure classes ─
+    for cls in eq_class_tags:
+        cv = class_cv.get(cls)
+        if cv is None or cv <= 0.8:
+            continue  # Not clearly random
+
+        # Only where a time-based strategy exists (hard-time replacement)
+        cls_strats = [s for s in all_strategies
+                      if s.equipment_class == cls and s.basis == "Time-based"]
+        if not cls_strats:
+            continue
+
+        target = min(cls_strats, key=lambda s: s.interval_days)  # most frequent — biggest impact
+        if (cls, target.task_code) in all_covered:
+            continue
+
+        cls_assets = [asset_map[t] for t in eq_class_tags.get(cls, []) if t in asset_map]
+        if len(cls_assets) < 2:
+            continue
+
+        failures_cls = eq_class_failures.get(cls, 0)
+        failure_rate = failures_cls / (len(cls_assets) * YEARS_SPAN)
+        class_crits = [a.criticality for a in cls_assets]
+        crit_ctr = _Counter(class_crits)
+        dominant_crit = crit_ctr.most_common(1)[0][0] if crit_ctr else "3"
+        consequence = _consequence_score(dominant_crit)
+
+        cur_l = _likelihood_score(failure_rate)
+        cur_score = cur_l * consequence
+        cur_band = _risk_band(cur_score)
+
+        # CBM doesn't change failure rate, but catches failures before function loss
+        # Risk stays the same or marginally improves
+        prop_l = max(1, cur_l - 1)
+        prop_score = prop_l * consequence
+        prop_band = _risk_band(prop_score)
+        b_delta = _risk_band_rank(prop_band) - _risk_band_rank(cur_band)
+
+        alarp_s = "Risk neutral or improved"
+        alarp_d = ("Condition-based monitoring detects functional failure before it occurs, "
+                   "maintaining or improving the existing risk position while eliminating "
+                   "unnecessary hard-time replacements that provide no statistical benefit.")
+        measures = ["Implement vibration / oil analysis monitoring programme",
+                    "Define P-F interval for condition parameter to be monitored",
+                    "Confirm spare parts availability for opportunistic replacement on condition"]
+
+        moc_r = "review"
+        moc_l = "Engineering review recommended"
+
+        # Savings: assume CBM replaces 60% of hard-time events (only replace on condition)
+        wpy = 365.0 / target.interval_days
+        hrs_saved = round(wpy * target.estimated_hours * len(cls_assets) * 0.60, 1)
+
+        mtbf_cls = class_mtbf.get(cls)
+        just_h22 = [{
+            "hypothesis": "H2.2",
+            "type": "Random Failure Pattern",
+            "finding": (
+                f"{cls} inter-failure times have a coefficient of variation of {cv} "
+                f"(threshold 0.8 = random). A CV above 0.8 indicates failures are not "
+                f"age-related — the asset is equally likely to fail the day after a time-based "
+                f"replacement as just before it. Hard-time replacement at {target.interval_days}-day "
+                f"intervals therefore provides no statistical reduction in failure probability. "
+                f"Condition-based monitoring should replace the scheduled replacement."
+            ),
+            "strength": "strong" if cv >= 1.0 else "moderate",
+        }]
+        if mtbf_cls:
+            just_h22.append({
+                "hypothesis": "H2.1",
+                "type": "MTBF vs PM Interval",
+                "finding": (
+                    f"Empirical MTBF ({int(mtbf_cls)}d) is "
+                    f"{mtbf_cls / target.interval_days:.1f}× the current interval, "
+                    f"further confirming the schedule is not aligned to the failure behaviour."
+                ),
+                "strength": "supporting",
+            })
+
+        proposals.append({
+            "id": f"H22-{cls[:3].upper()}-{target.task_code}",
+            "proposal_type": "strategy_change",
+            "change_description": f"Replace {target.interval_days}d time-based replacement with condition-based monitoring programme",
+            "equipment_class": cls,
+            "task_code": target.task_code,
+            "task_description": target.task_description,
+            "discipline": target.discipline,
+            "current_interval_days": target.interval_days,
+            "proposed_interval_days": None,  # Not a fixed interval
+            "affected_assets": len(cls_assets),
+            "dominant_criticality": dominant_crit,
+            "deferral_evidence": {"occurrences": 0, "avg_deferral_days": 0.0, "max_deferral_days": 0},
+            "failure_data": {"total_failures": failures_cls, "assets_in_class": len(cls_assets), "failure_rate_per_year": round(failure_rate, 3)},
+            "risk": {
+                "current_likelihood": cur_l, "current_likelihood_label": LIKELIHOOD_LABELS[cur_l],
+                "current_consequence": consequence, "current_consequence_label": CONSEQUENCE_LABELS[consequence],
+                "current_score": cur_score, "current_band": cur_band,
+                "proposed_likelihood": prop_l, "proposed_likelihood_label": LIKELIHOOD_LABELS[prop_l],
+                "proposed_consequence": consequence, "proposed_consequence_label": CONSEQUENCE_LABELS[consequence],
+                "proposed_score": prop_score, "proposed_band": prop_band,
+                "risk_delta": prop_score - cur_score, "band_delta": b_delta,
+                "alarp_status": alarp_s, "alarp_description": alarp_d,
+                "compensating_measures": measures,
+            },
+            "moc_readiness": moc_r,
+            "moc_label": moc_l,
+            "total_hours_saved_per_year": hrs_saved,
+            "evidence_hypotheses": ["H2.2"],
+            "justification": just_h22,
+        })
+        all_covered.add((cls, target.task_code))
+
+    # ── H2.4-driven proposals: align to regulatory minimum ────────────────────
+    for task_code, reg in REGULATORY_MINIMUMS.items():
+        strategy = strategy_map.get(task_code)
+        if not strategy:
+            continue
+        current_interval = strategy.interval_days
+        min_interval = reg["min_interval_days"]
+        if current_interval >= min_interval:
+            continue  # Already at or beyond minimum — no opportunity
+        if any(p["task_code"] == task_code for p in proposals):
+            continue  # Already covered
+
+        task_assets = [a for a in assets if a.equipment_class == strategy.equipment_class]
+        if not task_assets:
+            continue
+
+        proposed_interval = min_interval
+
+        failures_cls = eq_class_failures.get(strategy.equipment_class, 0)
+        total_cls = len(task_assets)
+        failure_rate = failures_cls / (total_cls * YEARS_SPAN) if total_cls > 0 else 0
+
+        class_crits = [a.criticality for a in task_assets]
+        crit_ctr = _Counter(class_crits)
+        dominant_crit = crit_ctr.most_common(1)[0][0] if crit_ctr else "2"
+        consequence = _consequence_score(dominant_crit)
+
+        cur_l = _likelihood_score(failure_rate)
+        cur_score = cur_l * consequence
+        cur_band = _risk_band(cur_score)
+        ext_r = proposed_interval / current_interval
+        prop_rate = failure_rate * (ext_r ** 0.5)
+        prop_l = _likelihood_score(prop_rate)
+        prop_score = prop_l * consequence
+        prop_band = _risk_band(prop_score)
+        b_delta = _risk_band_rank(prop_band) - _risk_band_rank(cur_band)
+
+        if b_delta > 1:
+            continue
+
+        alarp_s = "Risk neutral or improved" if b_delta <= 0 else "Acceptable with compensating measures"
+        alarp_d = (
+            f"Proposed interval ({min_interval}d) is the regulatory minimum mandated by {reg['regulation']}. "
+            f"The change retains full statutory compliance. {reg['notes']}"
+        )
+        measures = COMPENSATING_MEASURES_MAP.get(strategy.equipment_class, DEFAULT_MEASURES)
+        moc_r = "ready" if b_delta <= 0 else "review"
+        moc_l = "Ready to submit" if moc_r == "ready" else "Engineering review recommended"
+
+        wpy_cur = 365.0 / current_interval
+        wpy_prop = 365.0 / proposed_interval
+        hrs_saved = round((wpy_cur - wpy_prop) * strategy.estimated_hours * total_cls, 1)
+
+        just_h24 = [{
+            "hypothesis": "H2.4",
+            "type": "Regulatory Optimisation",
+            "finding": (
+                f"'{strategy.task_description}' is currently performed every {current_interval} days, "
+                f"which is more conservative than the regulatory minimum of {min_interval} days "
+                f"mandated by {reg['regulation']}. {reg['notes']} "
+                f"Extending to the regulatory minimum recovers "
+                f"{round(wpy_cur - wpy_prop, 1):.1f} task executions per asset per year "
+                f"whilst maintaining full statutory compliance."
+            ),
+            "strength": "strong",
+        }]
+
+        proposals.append({
+            "id": f"H24-{strategy.equipment_class[:3].upper()}-{task_code}",
+            "proposal_type": "regulatory_optimisation",
+            "change_description": f"Align to regulatory minimum ({reg['regulation']}) — extend from {current_interval}d to {min_interval}d",
+            "equipment_class": strategy.equipment_class,
+            "task_code": task_code,
+            "task_description": strategy.task_description,
+            "discipline": strategy.discipline,
+            "current_interval_days": current_interval,
+            "proposed_interval_days": proposed_interval,
+            "affected_assets": total_cls,
+            "dominant_criticality": dominant_crit,
+            "deferral_evidence": {"occurrences": 0, "avg_deferral_days": 0.0, "max_deferral_days": 0},
+            "failure_data": {"total_failures": failures_cls, "assets_in_class": total_cls, "failure_rate_per_year": round(failure_rate, 3)},
+            "risk": {
+                "current_likelihood": cur_l, "current_likelihood_label": LIKELIHOOD_LABELS[cur_l],
+                "current_consequence": consequence, "current_consequence_label": CONSEQUENCE_LABELS[consequence],
+                "current_score": cur_score, "current_band": cur_band,
+                "proposed_likelihood": prop_l, "proposed_likelihood_label": LIKELIHOOD_LABELS[prop_l],
+                "proposed_consequence": consequence, "proposed_consequence_label": CONSEQUENCE_LABELS[consequence],
+                "proposed_score": prop_score, "proposed_band": prop_band,
+                "risk_delta": prop_score - cur_score, "band_delta": b_delta,
+                "alarp_status": alarp_s, "alarp_description": alarp_d,
+                "compensating_measures": measures,
+            },
+            "moc_readiness": moc_r,
+            "moc_label": moc_l,
+            "total_hours_saved_per_year": hrs_saved,
+            "evidence_hypotheses": ["H2.4"],
+            "justification": just_h24,
+        })
 
     # Sort by MoC readiness first, then by hours saved
     readiness_order = {"ready": 0, "review": 1, "insufficient": 2}
