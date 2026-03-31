@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 import pandas as pd
 import io
 import os
+import threading
 from datetime import datetime
 
 # Load .env before any other imports that read env vars
@@ -48,6 +49,42 @@ def startup():
     try:
         if db.query(Asset).count() == 0:
             _load_demo_data(db)
+    finally:
+        db.close()
+
+    # Warm analysis cache in background so first user hit is instant
+    threading.Thread(target=_warm_cache, daemon=True).start()
+
+
+def _warm_cache():
+    from analysis import (
+        get_cost_summary, get_duty_standby_opportunities,
+        get_corrective_summary, get_strategy_proposals,
+        get_h1_1_analysis, get_h1_2_analysis, get_h1_3_analysis, get_h1_4_analysis,
+        get_h2_1_analysis, get_h2_2_analysis, get_h2_3_analysis, get_h2_4_analysis,
+        get_weibull_analysis, get_sce_analysis,
+    )
+    from routers.analysis_router import _cached
+    db = SessionLocal()
+    try:
+        print("Warming analysis cache...")
+        _cached("cost-summary:None", lambda: get_cost_summary(db, None))
+        _cached("duty-standby:None", lambda: get_duty_standby_opportunities(db, None))
+        _cached("corrective-summary:None", lambda: get_corrective_summary(db, None))
+        _cached("strategy-proposals:None", lambda: get_strategy_proposals(db, None))
+        _cached("h1-1:None:14", lambda: get_h1_1_analysis(db, None, min_deferral_days=14))
+        _cached("h1-2:None", lambda: get_h1_2_analysis(db, None))
+        _cached("h1-3:None:20.0:3", lambda: get_h1_3_analysis(db, None, cm_ppm_threshold=20.0, min_repeat_failures=3))
+        _cached("h1-4:None", lambda: get_h1_4_analysis(db, None))
+        _cached("h2-1:None:10.0:5.0", lambda: get_h2_1_analysis(db, None, over_conservative_threshold=10.0, review_threshold=5.0))
+        _cached("h2-2:None:0.8:0.5", lambda: get_h2_2_analysis(db, None, random_cv_threshold=0.8, wearout_cv_threshold=0.5))
+        _cached("h2-3:None:3", lambda: get_h2_3_analysis(db, None, min_corrective_events=3))
+        _cached("h2-4:None", lambda: get_h2_4_analysis(db, None))
+        _cached("weibull:None", lambda: get_weibull_analysis(db, None))
+        _cached("sce:None", lambda: get_sce_analysis(db, None))
+        print("Cache warm complete.")
+    except Exception as e:
+        print(f"Cache warming failed (non-fatal): {e}")
     finally:
         db.close()
 

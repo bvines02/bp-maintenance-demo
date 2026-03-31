@@ -579,6 +579,10 @@ def get_h1_3_analysis(db: Session, platforms: list[str] | None = None,
     tag_set = _asset_tags(db, platforms)
     all_wos = _filter_wos(db.query(WorkOrder), tag_set).all()
 
+    # Pre-load asset map — avoids N+1 queries in WO loops
+    all_assets_h13 = _filter_assets(db.query(Asset), tag_set).all()
+    asset_map_h13: dict[str, Asset] = {a.tag: a for a in all_assets_h13}
+
     # Corrective events per asset
     asset_corrective: dict = {}
     for wo in all_wos:
@@ -590,7 +594,7 @@ def get_h1_3_analysis(db: Session, platforms: list[str] | None = None,
     repeat_failures = []
     for tag, wos in asset_corrective.items():
         if len(wos) >= min_repeat_failures:
-            asset = db.query(Asset).filter(Asset.tag == tag).first()
+            asset = asset_map_h13.get(tag)
             failure_modes = list(set(w.failure_mode for w in wos if w.failure_mode))
             total_cost = sum(w.actual_cost or 0 for w in wos)
             repeat_failures.append({
@@ -610,7 +614,7 @@ def get_h1_3_analysis(db: Session, platforms: list[str] | None = None,
     class_cm: dict = {}
     class_cm_cost: dict = {}
     for wo in all_wos:
-        asset = db.query(Asset).filter(Asset.tag == wo.asset_tag).first()
+        asset = asset_map_h13.get(wo.asset_tag)
         cls = asset.equipment_class if asset else "Unknown"
         if wo.wo_type in ("PPM", "Statutory"):
             class_ppm[cls] = class_ppm.get(cls, 0) + 1
@@ -639,7 +643,7 @@ def get_h1_3_analysis(db: Session, platforms: list[str] | None = None,
     for wo in all_wos:
         if wo.wo_type != "Corrective" or not wo.scheduled_date:
             continue
-        asset = db.query(Asset).filter(Asset.tag == wo.asset_tag).first()
+        asset = asset_map_h13.get(wo.asset_tag)
         cls = asset.equipment_class if asset else "Unknown"
         if cls not in top_classes:
             continue
@@ -672,6 +676,10 @@ def get_corrective_summary(db: Session, platforms: list[str] | None = None) -> d
     tag_set = _asset_tags(db, platforms)
     wos = _filter_wos(db.query(WorkOrder).filter(WorkOrder.wo_type == "Corrective"), tag_set).all()
 
+    # Pre-load asset map to avoid N+1 queries in the WO loop
+    all_assets_cs = _filter_assets(db.query(Asset), tag_set).all()
+    asset_map_cs: dict[str, Asset] = {a.tag: a for a in all_assets_cs}
+
     by_class: dict = {}
     by_failure_mode: dict = {}
     by_discipline: dict = {}
@@ -682,7 +690,7 @@ def get_corrective_summary(db: Session, platforms: list[str] | None = None) -> d
         cost = w.actual_cost or 0
         total_cost += cost
 
-        asset = db.query(Asset).filter(Asset.tag == w.asset_tag).first()
+        asset = asset_map_cs.get(w.asset_tag)
         cls = asset.equipment_class if asset else "Unknown"
         by_class[cls] = by_class.get(cls, {"count": 0, "cost": 0.0})
         by_class[cls]["count"] += 1
