@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 import pandas as pd
 import io
 import os
+import threading
 from datetime import datetime
 
 # Load .env before any other imports that read env vars
@@ -43,16 +44,29 @@ app.include_router(chat.router)
 @app.on_event("startup")
 def startup():
     init_db()
-    # Auto-load demo data if DB is empty
+    from data_generator import PLATFORMS
+    expected_platforms = {p["name"] for p in PLATFORMS}
     db = SessionLocal()
     try:
+        existing = {r[0] for r in db.query(Asset.platform.distinct()).all() if r[0]}
+        # If DB has platforms that no longer exist in the config, clear and regenerate
+        if existing and not existing.issubset(expected_platforms):
+            print(f"Platform mismatch (DB has {existing}, config has {expected_platforms}) — clearing data...")
+            db.query(WorkOrder).delete()
+            db.query(Asset).delete()
+            db.query(MaintenanceStrategy).delete()
+            db.commit()
+            import shutil
+            demo_dir = os.path.join(os.path.dirname(__file__), "..", "demo_data")
+            if os.path.isdir(demo_dir):
+                shutil.rmtree(demo_dir)
         if db.query(Asset).count() == 0:
             _load_demo_data(db)
     finally:
         db.close()
 
-    # Warm analysis cache synchronously so every request after startup is instant
-    _warm_cache()
+    # Warm analysis cache in background — sequential (one at a time) to keep memory flat
+    threading.Thread(target=_warm_cache, daemon=True).start()
 
 
 def _warm_cache():

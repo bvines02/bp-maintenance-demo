@@ -58,36 +58,6 @@ PLATFORMS = [
             "Control Valve": 22,
         },
     },
-    {
-        "name": "Delta",
-        "code": "DLT",
-        "description": "West Africa FPSO — tropical environment, supply chain deferrals",
-        "install_year_range": (2008, 2020),
-        "criticality_weights": [0.45, 0.40, 0.15],
-        "mtbf_multiplier": 0.80,
-        "deferral_rate": 0.90,    # most deferrals — logistics & supply chain challenges
-        "count_overrides": {
-            "Fire & Gas Detector": 30,
-            "Pressure Transmitter": 22,
-        },
-    },
-    {
-        "name": "Echo",
-        "code": "ECH",
-        "description": "UK SNS gas platform — late-life asset, high age, end-of-field",
-        "install_year_range": (1996, 2010),
-        "criticality_weights": [0.35, 0.45, 0.20],
-        "mtbf_multiplier": 0.70,
-        "deferral_rate": 0.88,
-        "count_overrides": {
-            "Centrifugal Pump": 10,
-            "Gas Turbine Generator": 2,
-            "Centrifugal Compressor": 2,
-            "Fire & Gas Detector": 16,
-            "Safety Valve": 10,
-            "Pressure Vessel": 10,
-        },
-    },
 ]
 
 SYSTEMS = [

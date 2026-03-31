@@ -176,8 +176,8 @@ function Sidebar({ tab, setTab, mocReadyCount }: { tab: Tab; setTab: (t: Tab) =>
         <div style={{ fontSize: 10, color: "#1e3a5f", lineHeight: 1.8 }}>
           <div style={{ color: "#334155", fontWeight: 600, letterSpacing: "0.06em", marginBottom: 2 }}>DATASET</div>
           OREDA-calibrated synthetic data<br />
-          2019–2024 · 5 platforms<br />
-          848 assets · 38,447 work orders
+          2019–2024 · 3 platforms<br />
+          ~510 assets · ~23k work orders
         </div>
       </div>
     </aside>
