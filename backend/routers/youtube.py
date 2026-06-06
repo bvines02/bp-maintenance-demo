@@ -8,6 +8,7 @@ import anthropic
 import os
 import re
 import json
+from datetime import datetime, timezone
 
 router = APIRouter(prefix="/youtube", tags=["youtube"])
 
@@ -136,3 +137,117 @@ def transcribe_and_analyze(request: TranscribeRequest):
         action_items=insights.get("action_items", []),
         notable_quotes=insights.get("notable_quotes", []),
     )
+
+
+class NotionExportRequest(BaseModel):
+    page_id: str
+    video_id: str
+    video_url: str
+    summary: str
+    key_learnings: list[str]
+    key_concepts: list[dict]
+    action_items: list[str]
+    notable_quotes: list[str]
+
+
+def _t(text: str) -> dict:
+    return {"type": "text", "text": {"content": text}}
+
+
+def _heading(level: int, text: str) -> dict:
+    return {
+        "object": "block",
+        "type": f"heading_{level}",
+        f"heading_{level}": {"rich_text": [_t(text)]},
+    }
+
+
+def _paragraph(text: str) -> dict:
+    return {
+        "object": "block",
+        "type": "paragraph",
+        "paragraph": {"rich_text": [_t(text)]},
+    }
+
+
+def _bulleted(text: str) -> dict:
+    return {
+        "object": "block",
+        "type": "bulleted_list_item",
+        "bulleted_list_item": {"rich_text": [_t(text)]},
+    }
+
+
+def _quote(text: str) -> dict:
+    return {
+        "object": "block",
+        "type": "quote",
+        "quote": {"rich_text": [_t(f'"{text}"')]},
+    }
+
+
+def _divider() -> dict:
+    return {"object": "block", "type": "divider", "divider": {}}
+
+
+def _build_notion_blocks(req: NotionExportRequest) -> list[dict]:
+    blocks: list[dict] = []
+    blocks.append(_paragraph(f"YouTube: https://www.youtube.com/watch?v={req.video_id}"))
+    blocks.append(_paragraph(f"Saved: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"))
+    blocks.append(_divider())
+
+    blocks.append(_heading(2, "Summary"))
+    for para in req.summary.split("\n\n"):
+        if para.strip():
+            blocks.append(_paragraph(para.strip()))
+
+    if req.key_learnings:
+        blocks.append(_divider())
+        blocks.append(_heading(2, "Key Learnings"))
+        for item in req.key_learnings:
+            blocks.append(_bulleted(item))
+
+    if req.key_concepts:
+        blocks.append(_divider())
+        blocks.append(_heading(2, "Key Concepts"))
+        for c in req.key_concepts:
+            concept = c.get("concept", "")
+            explanation = c.get("explanation", "")
+            blocks.append(_paragraph(f"{concept} — {explanation}"))
+
+    if req.action_items:
+        blocks.append(_divider())
+        blocks.append(_heading(2, "Action Items"))
+        for item in req.action_items:
+            blocks.append(_bulleted(item))
+
+    if req.notable_quotes:
+        blocks.append(_divider())
+        blocks.append(_heading(2, "Notable Quotes"))
+        for q in req.notable_quotes:
+            blocks.append(_quote(q))
+
+    return blocks
+
+
+@router.post("/save-to-notion")
+def save_to_notion(req: NotionExportRequest):
+    token = os.environ.get("NOTION_TOKEN")
+    if not token:
+        raise HTTPException(status_code=500, detail="NOTION_TOKEN not set in environment.")
+
+    try:
+        from notion_client import Client as NotionClient
+        notion = NotionClient(auth=token)
+
+        page_id_clean = req.page_id.replace("-", "")
+        title = f"YT Insights — {req.video_id}"
+
+        child_page = notion.pages.create(
+            parent={"type": "page_id", "page_id": page_id_clean},
+            properties={"title": {"title": [_t(title)]}},
+            children=_build_notion_blocks(req),
+        )
+        return {"notion_url": child_page.get("url", ""), "page_id": child_page.get("id", "")}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Notion export failed: {str(e)}")

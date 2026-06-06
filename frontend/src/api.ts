@@ -44,3 +44,14 @@ export const getSCERegister = (platforms?: string) =>
 
 export const transcribeYouTube = (url: string) =>
   api.post("/youtube/transcribe", { url }).then(r => r.data);
+
+export const saveInsightsToNotion = (payload: {
+  page_id: string;
+  video_id: string;
+  video_url: string;
+  summary: string;
+  key_learnings: string[];
+  key_concepts: { concept: string; explanation: string }[];
+  action_items: string[];
+  notable_quotes: string[];
+}) => api.post("/youtube/save-to-notion", payload).then(r => r.data);

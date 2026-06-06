@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { transcribeYouTube } from "../api";
+import { transcribeYouTube, saveInsightsToNotion } from "../api";
 
 interface Concept {
   concept: string;
@@ -78,6 +78,37 @@ export default function YouTubeInsights() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<InsightsResult | null>(null);
   const [showTranscript, setShowTranscript] = useState(false);
+  const [notionPageId, setNotionPageId] = useState("");
+  const [notionSaving, setNotionSaving] = useState(false);
+  const [notionResult, setNotionResult] = useState<{ url: string } | null>(null);
+  const [notionError, setNotionError] = useState<string | null>(null);
+
+  async function handleSaveToNotion() {
+    if (!result || !notionPageId.trim()) return;
+    setNotionSaving(true);
+    setNotionError(null);
+    setNotionResult(null);
+    try {
+      const data = await saveInsightsToNotion({
+        page_id: notionPageId.trim(),
+        video_id: result.video_id,
+        video_url: url,
+        summary: result.summary,
+        key_learnings: result.key_learnings,
+        key_concepts: result.key_concepts as { concept: string; explanation: string }[],
+        action_items: result.action_items,
+        notable_quotes: result.notable_quotes,
+      });
+      setNotionResult({ url: data.notion_url });
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        "Failed to save to Notion.";
+      setNotionError(msg);
+    } finally {
+      setNotionSaving(false);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -220,6 +251,68 @@ export default function YouTubeInsights() {
             >
               {showTranscript ? "Hide transcript" : "Show transcript excerpt"}
             </button>
+          </div>
+
+          {/* Notion export panel */}
+          <div style={{ ...S.card, marginBottom: 16, padding: "14px 20px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="#94a3b8"
+                strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <path d="M4 4h16v16H4z" />
+                <path d="M9 9h6M9 13h4" />
+              </svg>
+              <span style={{ fontSize: 13, color: "#64748b", flexShrink: 0 }}>Save to Notion</span>
+              <input
+                type="text"
+                value={notionPageId}
+                onChange={e => setNotionPageId(e.target.value)}
+                placeholder="Notion page ID (from the page URL)"
+                style={{
+                  flex: 1,
+                  minWidth: 180,
+                  background: "#06101f",
+                  border: "1px solid #1e3a5f",
+                  borderRadius: 6,
+                  padding: "7px 12px",
+                  color: "#e2e8f0",
+                  fontSize: 13,
+                  outline: "none",
+                }}
+                disabled={notionSaving}
+              />
+              <button
+                onClick={handleSaveToNotion}
+                disabled={notionSaving || !notionPageId.trim()}
+                style={{
+                  background: notionSaving || !notionPageId.trim() ? "#0f2744" : "#1e3a5f",
+                  color: notionSaving || !notionPageId.trim() ? "#334155" : "#93c5fd",
+                  border: "1px solid #1e3a5f",
+                  borderRadius: 6,
+                  padding: "7px 16px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: notionSaving || !notionPageId.trim() ? "default" : "pointer",
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
+                }}
+              >
+                {notionSaving ? "Saving…" : "Export"}
+              </button>
+            </div>
+            {notionResult && (
+              <div style={{ marginTop: 10, fontSize: 13, color: "#10b981" }}>
+                Saved!{" "}
+                {notionResult.url && (
+                  <a href={notionResult.url} target="_blank" rel="noreferrer"
+                    style={{ color: "#34d399", textDecoration: "underline" }}>
+                    Open in Notion →
+                  </a>
+                )}
+              </div>
+            )}
+            {notionError && (
+              <div style={{ marginTop: 10, fontSize: 13, color: "#fca5a5" }}>{notionError}</div>
+            )}
           </div>
 
           {showTranscript && (
