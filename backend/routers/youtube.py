@@ -240,7 +240,10 @@ def save_to_notion(req: NotionExportRequest):
         from notion_client import Client as NotionClient
         notion = NotionClient(auth=token)
 
-        page_id_clean = req.page_id.replace("-", "")
+        # Accept full Notion URLs (app.notion.com/p/ID or notion.so/.../ID) or raw IDs
+        raw = req.page_id.strip()
+        url_match = re.search(r"[0-9a-f]{32}", raw.replace("-", ""))
+        page_id_clean = url_match.group(0) if url_match else raw.replace("-", "")
         title = f"YT Insights — {req.video_id}"
 
         child_page = notion.pages.create(
