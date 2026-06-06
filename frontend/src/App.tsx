@@ -7,6 +7,7 @@ import HypothesisTesting from "./components/HypothesisTesting";
 import StrategyProposals from "./components/StrategyProposals";
 import WeibullAnalysis from "./components/WeibullAnalysis";
 import SCERegister from "./components/SCERegister";
+import YouTubeInsights from "./components/YouTubeInsights";
 import { PlatformProvider, usePlatforms } from "./context/PlatformContext";
 import { getStrategyProposals } from "./api";
 
@@ -14,7 +15,7 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 5 * 60 * 1000, retry: 1 } },
 });
 
-type Tab = "dashboard" | "hypotheses" | "proposals" | "weibull" | "sce" | "corrective" | "assets";
+type Tab = "dashboard" | "hypotheses" | "proposals" | "weibull" | "sce" | "corrective" | "assets" | "youtube";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Overview" },
@@ -24,6 +25,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "sce", label: "SCE Register" },
   { id: "corrective", label: "Corrective Maintenance" },
   { id: "assets", label: "Asset Register" },
+  { id: "youtube", label: "YouTube Insights" },
 ];
 
 const TAB_DESCRIPTIONS: Record<Tab, string> = {
@@ -34,6 +36,7 @@ const TAB_DESCRIPTIONS: Record<Tab, string> = {
   sce: "Safety Critical Elements and statutory inspection register — excluded from all optimisation scope",
   corrective: "Breakdown and unplanned maintenance history — failure modes and downtime by equipment class",
   assets: "Full asset register with duty/standby pairing and criticality classifications",
+  youtube: "Paste a YouTube URL — Claude transcribes the video and extracts key learnings, concepts, and action items",
 };
 
 const PLATFORM_COLORS: Record<string, string> = {
@@ -49,6 +52,7 @@ function NavIcon({ id, active }: { id: Tab; active: boolean }) {
   const paths: Record<Tab, string | string[]> = {
     dashboard: "M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z",
     hypotheses: ["M9 3v8L5 18c-.6 1 .2 2 1.5 2h11c1.3 0 2.1-1 1.5-2L15 11V3", "M9 3h6", "M8 7h8"],
+    youtube: ["M22.54 6.42a2.78 2.78 0 0 0-1.95-1.96C18.88 4 12 4 12 4s-6.88 0-8.59.46a2.78 2.78 0 0 0-1.95 1.96A29 29 0 0 0 1 12a29 29 0 0 0 .46 5.58A2.78 2.78 0 0 0 3.41 19.54C5.12 20 12 20 12 20s6.88 0 8.59-.46a2.78 2.78 0 0 0 1.95-1.96A29 29 0 0 0 23 12a29 29 0 0 0-.46-5.58z", "M9.75 15.02 15.5 12l-5.75-3.02v6.04z"],
     proposals: "M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z",
     weibull: ["M3 20l5-10 4 6 3-4 6 8", "M3 20h18"],
     sce: ["M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"],
@@ -223,6 +227,7 @@ function AppInner() {
           {tab === "sce" && <SCERegister />}
           {tab === "corrective" && <CorrectiveMaintenance />}
           {tab === "assets" && <AssetRegister />}
+          {tab === "youtube" && <YouTubeInsights />}
         </main>
       </div>
     </div>

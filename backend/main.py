@@ -16,7 +16,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 DIST_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 
 from database import init_db, SessionLocal, Asset, WorkOrder, MaintenanceStrategy
-from routers import assets, workorders, analysis_router, chat
+from routers import assets, workorders, analysis_router, chat, youtube
 from data_generator import generate_all
 
 app = FastAPI(title="BP Maintenance Optimisation", version="1.0.0")
@@ -39,6 +39,7 @@ app.include_router(assets.router)
 app.include_router(workorders.router)
 app.include_router(analysis_router.router)
 app.include_router(chat.router)
+app.include_router(youtube.router)
 
 
 @app.on_event("startup")

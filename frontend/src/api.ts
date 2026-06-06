@@ -41,3 +41,6 @@ export const getWeibullAnalysis = (platforms?: string) =>
 
 export const getSCERegister = (platforms?: string) =>
   api.get("/analysis/sce-register", { params: p(platforms) }).then(r => r.data);
+
+export const transcribeYouTube = (url: string) =>
+  api.post("/youtube/transcribe", { url }).then(r => r.data);
